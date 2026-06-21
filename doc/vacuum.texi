@@ -1,23 +1,31 @@
 \input texinfo   @c -*-texinfo-*-
 @c SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
-@c SPDX-License-Identifier: GPL-3.0-or-later
+@c SPDX-License-Identifier: CC-BY-SA-4.0
 @c %**start of header
 @setfilename vacuum.info
 @documentencoding UTF-8
-@settitle Vacuum Manual
+@documentlanguage en
+@settitle Vacuum Manual 0.1.0
 @c %**end of header
 
 @set VERSION 0.1.0
+@set UPDATED 2026-06-21
 
 @copying
-This manual is for Vacuum (version @value{VERSION}), a fast, safe disk-space
-recovery tool for the terminal.
+This manual is for Vacuum (version @value{VERSION}, updated @value{UPDATED}), a
+fast, safe disk-space recovery tool for the terminal, part of the Spacecraft
+Software ecosystem.
 
-Copyright @copyright{} 2026 Mohamed Hammad & Spacecraft Software.
+Copyright @copyright{} 2026 Mohamed Hammad and Spacecraft Software.
+
+Maintained by Mohamed Hammad (Mohamed.Hammad @@ SpacecraftSoftware.org),
+@uref{https://Vacuum.SpacecraftSoftware.org/}.
 
 @quotation
 Permission is granted to copy, distribute and/or modify this document under the
-terms of the Creative Commons Attribution-ShareAlike 4.0 International License.
+terms of the Creative Commons Attribution-ShareAlike 4.0 International License
+(CC-BY-SA-4.0). A copy of the license is included in the source distribution
+under @file{LICENSES/}.
 @end quotation
 @end copying
 
@@ -28,8 +36,10 @@ terms of the Creative Commons Attribution-ShareAlike 4.0 International License.
 
 @titlepage
 @title Vacuum Manual
+@subtitle Fast, safe disk-space recovery for the terminal
 @subtitle For Vacuum version @value{VERSION}
 @author Mohamed Hammad
+@author @email{Mohamed.Hammad@@SpacecraftSoftware.org}
 @page
 @vskip 0pt plus 1filll
 @insertcopying
@@ -45,11 +55,15 @@ terms of the Creative Commons Attribution-ShareAlike 4.0 International License.
 @end ifnottex
 
 @menu
-* Overview::            What Vacuum does.
-* Invocation::          Commands and options.
-* Cleaner Categories::  What Vacuum reclaims.
-* Safety Model::        How Vacuum avoids data loss.
-* Attribution::         Maintainer and license.
+* Overview::             What Vacuum does.
+* Invocation::           Commands and global options.
+* Output Modes::         Human text, JSON envelope, JSONL, and field selection.
+* Exit Codes::           The canonical exit-code map.
+* Errors and Hints::     Structured errors with runnable next-step hints.
+* Cleaner Categories::   What Vacuum reclaims.
+* Safety Model::         How Vacuum avoids data loss.
+* Agent Integration::    Driving Vacuum from an AI agent or pipeline.
+* Attribution::          Maintainer and license.
 @end menu
 
 @node Overview
@@ -57,22 +71,37 @@ terms of the Creative Commons Attribution-ShareAlike 4.0 International License.
 
 Vacuum scans disk usage in parallel, groups the reclaimable space into clear
 categories, and lets you delete what you choose. It is a command-line tool with
-an interactive terminal user interface (TUI).
+an interactive terminal user interface (TUI), built to be equally comfortable
+for a human at a prompt and for an AI agent driving it over a pipe.
 
 Run with no arguments in a terminal to launch the TUI; otherwise use the
-@command{scan}, @command{list}, and @command{clean} subcommands.
+@command{scan}, @command{list}, and @command{clean} subcommands. Two further
+subcommands, @command{schema} and @command{describe}, let a program discover the
+command surface without parsing help text.
+
+Vacuum is conservative by default: it never removes anything without an explicit
+@option{--apply}, it routes deletions to the trash unless you ask to purge, and
+it refuses to touch protected system paths. @xref{Safety Model}.
 
 @node Invocation
 @chapter Invocation
 
+@menu
+* Subcommands::          scan, list, clean, schema, describe, tui.
+* Global Options::       Flags accepted by every subcommand.
+@end menu
+
+@node Subcommands
+@section Subcommands
+
 @table @code
 @item vacuum
 Launch the interactive TUI (when standard output is a terminal and no AI agent
-is detected).
+is detected). Equivalent to @command{vacuum tui}.
 
 @item vacuum scan [@var{paths}@dots{}] [--limit @var{n}]
 Report the largest consumers under each path (default: your home directory),
-largest first. Equivalent to @samp{du --max-depth=1 | sort -rh}.
+largest first. Equivalent in spirit to @samp{du --max-depth=1 | sort -rh}.
 
 @item vacuum list [--category @var{cat}@dots{}] [--root @var{path}@dots{}]
 List reclaimable candidates by category. Read-only.
@@ -80,12 +109,153 @@ List reclaimable candidates by category. Read-only.
 @item vacuum clean [--category @var{cat}@dots{}] [--root @var{path}@dots{}] [--apply] [--purge] [--yes]
 Remove reclaimable space. Without @option{--apply} this is a dry run.
 Deletions go to the trash unless @option{--purge} is given. Use @option{--yes}
-to skip the confirmation prompt (required for non-interactive use).
+(alias @option{--force}) to skip the confirmation prompt; this is required for
+non-interactive use. @xref{Safety Model}.
+
+@item vacuum schema
+Emit a JSON Schema (Draft 2020-12) of the whole command surface on standard
+output. The per-command @code{parameters} objects drop directly into the
+function-calling APIs of the major LLM providers. @xref{Agent Integration}.
+
+@item vacuum describe
+Emit a compact capability manifest: the command list, category slugs, and the
+safety defaults. Honors @option{--json}.
+
+@item vacuum tui
+Launch the interactive TUI explicitly.
 @end table
 
-Global options: @option{--json} (or @option{--format json}) emits a
-machine-readable envelope with ISO@tie{}8601 UTC timestamps; @option{--color}
-and @option{--no-color} control color.
+@node Global Options
+@section Global Options
+
+These flags are accepted by every subcommand.
+
+@table @option
+@item --json
+Emit the machine-readable JSON envelope. Shorthand for @option{--format json}.
+
+@item --format @var{fmt}
+Select the output format: @code{human}, @code{json}, @code{jsonl}, or
+@code{explore} (the interactive TUI). @xref{Output Modes}.
+
+@item --fields @var{f1,f2,@dots{}}
+Restrict JSON records to the named fields, reducing payload size for
+token-billed agents. @xref{Output Modes}.
+
+@item --color @var{when}
+@itemx --no-color
+Control ANSI color: @code{auto}, @code{always}, or @code{never}. @option{--no-color}
+is equivalent to @option{--color never}.
+
+@item --verbose
+@itemx -v
+Emit diagnostic detail to standard error.
+
+@item --quiet
+@itemx -q
+Suppress non-error standard-error output, such as per-item skip warnings.
+@end table
+
+Timestamps in JSON output are always ISO@tie{}8601 UTC with a mandatory @code{Z}
+suffix (Standard @t{§14}); local-time rendering never appears in machine output.
+
+@node Output Modes
+@chapter Output Modes
+
+Vacuum renders the same data two ways. It chooses automatically, but you can
+force the choice with @option{--format} or @option{--json}.
+
+@table @asis
+@item Detection cascade
+An explicit @option{--format}/@option{--json} flag always wins. Otherwise, if an
+AI-agent or CI environment variable is set (@pxref{Agent Integration}), or
+standard output is not a terminal, Vacuum emits JSON; an interactive terminal
+gets human-readable text.
+
+@item The JSON envelope
+Every @option{--json} response is a single document of the form:
+
+@verbatim
+{
+  "metadata": {
+    "tool": "vacuum",
+    "version": "0.1.0",
+    "command": "vacuum list --json",
+    "timestamp": "2026-06-21T14:30:00Z",
+    "maintainer": "Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>",
+    "website": "https://Vacuum.SpacecraftSoftware.org/"
+  },
+  "data": { "categories": [ ... ], "total_bytes": 0 }
+}
+@end verbatim
+
+Property names are @code{snake_case}; numbers are JSON numbers; absent optional
+fields are omitted rather than emitted as @code{null}. Output is pretty-printed
+only when standard output is a terminal; piped consumers receive compact JSON.
+
+@item JSONL streaming
+@option{--format jsonl} emits one JSON record per line with no enclosing
+envelope, so a consumer can process records as they arrive. For @command{list}
+the rows are candidates; for @command{scan}, usage entries; for @command{clean},
+outcomes.
+
+@item Field selection
+@option{--fields label,bytes} projects each JSON record down to the named keys.
+This is the primary lever for trimming token cost when an agent needs only part
+of each record.
+@end table
+
+@node Exit Codes
+@chapter Exit Codes
+
+Vacuum follows the Spacecraft Software canonical exit-code map, so a calling
+program can branch on the status without parsing output.
+
+@table @code
+@item 0
+Success.
+@item 1
+General failure (for example, a deletion or external command failed).
+@item 2
+Usage error: bad arguments. Fix the invocation; do not retry verbatim.
+@item 3
+Resource not found.
+@item 4
+Permission denied, or an action refused by a safety guard (outside the allowed
+roots, a protected system path, or a symlink).
+@item 5
+Conflict (already exists).
+@item 127
+A required external tool is not installed.
+@end table
+
+In any machine-readable mode, a non-zero exit is always accompanied by a
+structured error object on standard error. @xref{Errors and Hints}.
+
+@node Errors and Hints
+@chapter Errors and Hints
+
+In JSON mode, failures are emitted to standard error as a single object so an
+agent never has to parse a prose sentence:
+
+@verbatim
+{
+  "error": {
+    "code": "UNKNOWN_CATEGORY",
+    "exit_code": 2,
+    "message": "unknown category: not-a-category",
+    "hint": "vacuum schema --json | jaq '.commands[] | select(.name==\"list\") | .categories'",
+    "timestamp": "2026-06-21T14:30:00Z",
+    "command": "vacuum list --category not-a-category",
+    "docs_url": "https://Vacuum.SpacecraftSoftware.org/"
+  }
+}
+@end verbatim
+
+The @code{hint} field is a @emph{runnable command}, not advice in prose: an agent
+can execute it directly to recover. In human mode the same failure renders as a
+short @samp{vacuum: @dots{}} line followed by a @samp{hint: @dots{}} line.
+Standard output is never written on the error path.
 
 @node Cleaner Categories
 @chapter Cleaner Categories
@@ -116,6 +286,8 @@ Vacuum is conservative by design:
 @itemize @bullet
 @item Dry run by default; nothing is removed without @option{--apply}.
 @item Path removals go to the XDG trash unless @option{--purge} is given.
+@item A real @option{--apply} run refuses to act non-interactively unless
+@option{--yes} (alias @option{--force}) is supplied; interactively it prompts.
 @item Operation is bounded to your home directory plus any paths you name;
 protected system locations are refused.
 @item Symlinks are never followed when deleting, and source files are never
@@ -124,14 +296,40 @@ removed.
 command is reported for you to run.
 @end itemize
 
+@node Agent Integration
+@chapter Agent Integration
+
+Vacuum is designed to be driven by an AI agent or an automation pipeline as
+readily as by a person.
+
+@table @asis
+@item Environment detection
+When any of @env{AI_AGENT}, @env{AGENT}, or @env{CI} is set to a non-empty
+value, Vacuum suppresses the TUI, defaults to JSON, and disables color. The
+informational variables @env{CLAUDECODE}, @env{CURSOR_AGENT}, and
+@env{GEMINI_CLI} are recognized but do not by themselves change the output
+format.
+
+@item Function-calling schema
+@command{vacuum schema} emits a JSON Schema whose per-command @code{parameters}
+objects are valid Anthropic @code{input_schema} / MCP @code{inputSchema}
+payloads. An agent can fetch the schema once and call the tool without guessing
+flag names.
+
+@item Token economy
+Use @option{--fields} to trim each record to the keys you need, and
+@option{--format jsonl} to stream large result sets. Optional fields are omitted
+when absent, and piped output is compact.
+@end table
+
 @node Attribution
 @chapter Attribution
 
 Maintained by Mohamed Hammad
 (@email{Mohamed.Hammad@@SpacecraftSoftware.org}).
 
-Copyright @copyright{} 2026 Mohamed Hammad & Spacecraft Software.
-License: GPL-3.0-or-later.
-@uref{https://Vacuum.SpacecraftSoftware.org/}
+Copyright @copyright{} 2026 Mohamed Hammad and Spacecraft Software.
+Manual licensed under CC-BY-SA-4.0; the Vacuum software is licensed under
+GPL-3.0-or-later. @uref{https://Vacuum.SpacecraftSoftware.org/}
 
 @bye

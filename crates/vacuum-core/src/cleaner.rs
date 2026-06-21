@@ -127,6 +127,9 @@ pub struct Candidate {
     /// A short human-readable label (typically the path or tool name).
     pub label: String,
     /// Optional extra detail (e.g. why it is safe to remove).
+    ///
+    /// Omitted from JSON output when absent (token-economy hygiene, SFRS §8).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// Estimated bytes reclaimed; `0` when the amount cannot be measured ahead
     /// of time (true for some command-based cleaners).

@@ -3,6 +3,8 @@
 
 //! The SFRS JSON output envelope (`{ metadata, data }`).
 
+use std::io::IsTerminal as _;
+
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -31,7 +33,9 @@ struct Envelope<T: Serialize> {
 
 /// Serialize `data` inside the standard envelope and print it to stdout.
 ///
-/// The timestamp is ISO 8601 UTC with a `Z` suffix (Standard §14).
+/// The timestamp is ISO 8601 UTC with a `Z` suffix (Standard §14). Output is
+/// pretty-printed only when stdout is a terminal; piped/agent consumers get
+/// compact JSON so they are not billed for whitespace (SFRS §8.6).
 ///
 /// # Errors
 ///
@@ -48,7 +52,11 @@ pub fn emit<T: Serialize>(command: &str, data: T) -> anyhow::Result<()> {
         },
         data,
     };
-    let rendered = serde_json::to_string_pretty(&envelope)?;
+    let rendered = if std::io::stdout().is_terminal() {
+        serde_json::to_string_pretty(&envelope)?
+    } else {
+        serde_json::to_string(&envelope)?
+    };
     println!("{rendered}");
     Ok(())
 }

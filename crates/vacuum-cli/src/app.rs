@@ -7,6 +7,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 
 use serde::Serialize;
+use serde_json::{Value, json};
 use vacuum_cleaners::cleaners_for;
 use vacuum_core::{
     Action, Candidate, DeleteMode, Deleter, Outcome, ScanContext, Usage, human_bytes, safety, scan,
@@ -14,8 +15,9 @@ use vacuum_core::{
 };
 
 use crate::agent::OutputMode;
-use crate::cli::{CleanArgs, ScanArgs, SelectArgs};
+use crate::cli::{CleanArgs, GlobalArgs, ScanArgs, SelectArgs};
 use crate::envelope;
+use crate::error::{CliError, CliResult};
 
 /// Resolve explicit roots, falling back to the user's home directory.
 fn resolve_roots(explicit: &[PathBuf]) -> Vec<PathBuf> {
@@ -34,6 +36,40 @@ fn counts_bytes(action: Action) -> bool {
     )
 }
 
+/// Project a record onto `fields`, dropping the rest. An empty field list
+/// returns the record whole. Non-object records pass through untouched
+/// (token-economy hygiene, SFRS §8).
+fn project<T: Serialize>(record: &T, fields: &[String]) -> Value {
+    let value = serde_json::to_value(record).unwrap_or(Value::Null);
+    if fields.is_empty() {
+        return value;
+    }
+    match value {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for field in fields {
+                if let Some(found) = map.get(field) {
+                    out.insert(field.clone(), found.clone());
+                }
+            }
+            Value::Object(out)
+        }
+        other => other,
+    }
+}
+
+/// Print one compact JSON object per line (newline-delimited JSON).
+fn emit_jsonl<T: Serialize>(rows: &[T]) -> CliResult<()> {
+    let stdout = std::io::stdout();
+    let mut lock = stdout.lock();
+    for row in rows {
+        let line = serde_json::to_string(row)
+            .map_err(|err| CliError::internal(&anyhow::Error::from(err)))?;
+        writeln!(lock, "{line}").map_err(|err| CliError::internal(&anyhow::Error::from(err)))?;
+    }
+    Ok(())
+}
+
 // --- scan ----------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -48,7 +84,12 @@ struct ScanReport {
 }
 
 /// Run `vacuum scan`.
-pub fn run_scan(args: &ScanArgs, mode: OutputMode, command_line: &str) -> anyhow::Result<()> {
+pub fn run_scan(
+    args: &ScanArgs,
+    mode: OutputMode,
+    global: &GlobalArgs,
+    command_line: &str,
+) -> CliResult<()> {
     let roots = resolve_roots(&args.paths);
     let mut report = ScanReport { roots: Vec::new() };
 
@@ -61,7 +102,34 @@ pub fn run_scan(args: &ScanArgs, mode: OutputMode, command_line: &str) -> anyhow
     }
 
     match mode {
-        OutputMode::Json => envelope::emit(command_line, &report)?,
+        OutputMode::Json => {
+            let data = json!({
+                "roots": report.roots.iter().map(|root| json!({
+                    "root": root.root,
+                    "entries": root.entries.iter()
+                        .map(|entry| project(entry, &global.fields)).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            });
+            envelope::emit(command_line, &data).map_err(|err| CliError::internal(&err))?;
+        }
+        OutputMode::Jsonl => {
+            let rows: Vec<Value> = report
+                .roots
+                .iter()
+                .flat_map(|root| {
+                    root.entries.iter().map(move |entry| {
+                        let mut row = project(entry, &global.fields);
+                        if global.fields.is_empty() {
+                            if let Value::Object(map) = &mut row {
+                                map.insert("root".to_owned(), json!(root.root));
+                            }
+                        }
+                        row
+                    })
+                })
+                .collect();
+            emit_jsonl(&rows)?;
+        }
         OutputMode::Human => {
             for root in &report.roots {
                 println!("\n{}", root.root);
@@ -81,7 +149,7 @@ pub fn run_scan(args: &ScanArgs, mode: OutputMode, command_line: &str) -> anyhow
 
 // --- list ----------------------------------------------------------------
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct CategoryGroup {
     category: &'static str,
     title: &'static str,
@@ -89,15 +157,11 @@ struct CategoryGroup {
     candidates: Vec<Candidate>,
 }
 
-#[derive(Debug, Serialize)]
-struct ListReport {
-    categories: Vec<CategoryGroup>,
-    total_bytes: u64,
-}
-
 /// Gather candidates for the selected categories within the selected roots.
-fn gather(select: &SelectArgs) -> anyhow::Result<Vec<CategoryGroup>> {
-    let categories = select.selected_categories().map_err(anyhow::Error::msg)?;
+fn gather(select: &SelectArgs) -> CliResult<Vec<CategoryGroup>> {
+    let categories = select
+        .selected_categories()
+        .map_err(CliError::unknown_category)?;
     let ctx = ScanContext {
         roots: resolve_roots(&select.roots),
     };
@@ -116,24 +180,45 @@ fn gather(select: &SelectArgs) -> anyhow::Result<Vec<CategoryGroup>> {
 }
 
 /// Run `vacuum list`.
-pub fn run_list(args: &SelectArgs, mode: OutputMode, command_line: &str) -> anyhow::Result<()> {
+pub fn run_list(
+    args: &SelectArgs,
+    mode: OutputMode,
+    global: &GlobalArgs,
+    command_line: &str,
+) -> CliResult<()> {
     let groups = gather(args)?;
-    let grand_total = groups.iter().map(|group| group.total_bytes).sum();
-    let report = ListReport {
-        categories: groups,
-        total_bytes: grand_total,
-    };
+    let grand_total: u64 = groups.iter().map(|group| group.total_bytes).sum();
 
     match mode {
-        OutputMode::Json => envelope::emit(command_line, &report)?,
+        OutputMode::Json => {
+            let data = json!({
+                "categories": groups.iter().map(|group| json!({
+                    "category": group.category,
+                    "title": group.title,
+                    "total_bytes": group.total_bytes,
+                    "candidates": group.candidates.iter()
+                        .map(|candidate| project(candidate, &global.fields)).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+                "total_bytes": grand_total,
+            });
+            envelope::emit(command_line, &data).map_err(|err| CliError::internal(&err))?;
+        }
+        OutputMode::Jsonl => {
+            let rows: Vec<Value> = groups
+                .iter()
+                .flat_map(|group| group.candidates.iter())
+                .map(|candidate| project(candidate, &global.fields))
+                .collect();
+            emit_jsonl(&rows)?;
+        }
         OutputMode::Human => {
-            for group in &report.categories {
+            for group in &groups {
                 println!("\n{} — {}", group.title, human_bytes(group.total_bytes));
                 for candidate in &group.candidates {
                     println!("  {:>10}  {}", size_label(candidate), candidate.label);
                 }
             }
-            println!("\nTotal reclaimable: {}", human_bytes(report.total_bytes));
+            println!("\nTotal reclaimable: {}", human_bytes(grand_total));
         }
     }
     Ok(())
@@ -159,7 +244,12 @@ struct CleanReport {
 }
 
 /// Run `vacuum clean`.
-pub fn run_clean(args: &CleanArgs, mode: OutputMode, command_line: &str) -> anyhow::Result<()> {
+pub fn run_clean(
+    args: &CleanArgs,
+    mode: OutputMode,
+    global: &GlobalArgs,
+    command_line: &str,
+) -> CliResult<()> {
     let groups = gather(&args.select)?;
     let candidates: Vec<Candidate> = groups
         .into_iter()
@@ -187,8 +277,8 @@ pub fn run_clean(args: &CleanArgs, mode: OutputMode, command_line: &str) -> anyh
             human_bytes(projected),
             candidates.len()
         );
-        if mode == OutputMode::Json || !confirm(&prompt) {
-            anyhow::bail!("aborted: pass --yes to apply non-interactively");
+        if mode.is_machine() || !confirm(&prompt) {
+            return Err(CliError::confirmation_required(verb));
         }
     }
 
@@ -204,7 +294,11 @@ pub fn run_clean(args: &CleanArgs, mode: OutputMode, command_line: &str) -> anyh
                 }
                 outcomes.push(outcome);
             }
-            Err(err) => eprintln!("vacuum: skipping {}: {err}", candidate.label),
+            Err(err) => {
+                if !global.quiet {
+                    eprintln!("vacuum: skipping {}: {err}", candidate.label);
+                }
+            }
         }
     }
 
@@ -216,7 +310,24 @@ pub fn run_clean(args: &CleanArgs, mode: OutputMode, command_line: &str) -> anyh
     };
 
     match mode {
-        OutputMode::Json => envelope::emit(command_line, &report)?,
+        OutputMode::Json => {
+            let data = json!({
+                "dry_run": report.dry_run,
+                "mode": report.mode,
+                "reclaimed_bytes": report.reclaimed_bytes,
+                "outcomes": report.outcomes.iter()
+                    .map(|outcome| project(outcome, &global.fields)).collect::<Vec<_>>(),
+            });
+            envelope::emit(command_line, &data).map_err(|err| CliError::internal(&err))?;
+        }
+        OutputMode::Jsonl => {
+            let rows: Vec<Value> = report
+                .outcomes
+                .iter()
+                .map(|outcome| project(outcome, &global.fields))
+                .collect();
+            emit_jsonl(&rows)?;
+        }
         OutputMode::Human => {
             for outcome in &report.outcomes {
                 let size = if outcome.bytes == 0 {

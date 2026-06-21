@@ -1,0 +1,76 @@
+/* SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+   SPDX-License-Identifier: GPL-3.0-or-later
+
+   Spacecraft Software HTML theme for texi2any output.
+   Apply with:  texi2any --html --no-split --css-include=spacecraft.css FILE.texi
+   Palette: Steelbore Standard §10.  Typography: §11 (Share Tech Mono / Inconsolata, both OFL).
+   Fonts load from Google Fonts; system monospace is the offline fallback. */
+
+@import url('https://fonts.googleapis.com/css2?family=Inconsolata:wght@400;700&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --void-navy:       #000027;  /* background / canvas        */
+  --molten-amber:    #D98E32;  /* body text / active readout */
+  --steel-blue:      #4B7EB0;  /* H1 / accent / visited link */
+  --radium-green:    #50FA7B;  /* H2 / success               */
+  --liquid-coolant:  #8BE9FD;  /* H3 / info / link           */
+  --red-oxide:       #FF5C5C;  /* warning / error            */
+}
+
+body {
+  background-color: var(--void-navy);
+  color: var(--molten-amber);
+  font-family: 'Inconsolata', monospace;
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0 auto;
+  max-width: 50rem;
+  padding: 2rem 1.5rem;
+}
+
+h1, h2, h3, h4, h5, h6,
+.settitle, .shortcontents-heading, .contents-heading {
+  font-family: 'Share Tech Mono', monospace;
+  font-weight: normal;
+  line-height: 1.25;
+}
+
+h1, .titlefont, .settitle           { color: var(--steel-blue); }
+h2, .chapter, .unnumbered, .appendix { color: var(--steel-blue); }
+h3, .section                         { color: var(--radium-green); }
+h4, h5, h6, .subsection, .subsubsection { color: var(--liquid-coolant); }
+
+a:link    { color: var(--liquid-coolant); }
+a:visited { color: var(--steel-blue); }
+a:hover   { color: var(--radium-green); }
+
+code, samp, kbd, tt, pre, .verbatim,
+.example, .smallexample, .lisp {
+  font-family: 'Inconsolata', monospace;
+  color: var(--liquid-coolant);
+}
+
+pre.example, pre.verbatim, pre.smallexample, pre.lisp, pre.display {
+  background-color: rgba(75, 126, 176, 0.12);  /* steel-blue wash */
+  border-left: 3px solid var(--steel-blue);
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+}
+
+blockquote, .quotation {
+  border-left: 3px solid var(--molten-amber);
+  margin-left: 0;
+  padding-left: 1rem;
+  color: var(--molten-amber);
+}
+
+table { border-collapse: collapse; }
+th, td { border: 1px solid var(--steel-blue); padding: 0.35rem 0.6rem; }
+th { color: var(--radium-green); font-family: 'Share Tech Mono', monospace; }
+
+/* Definition commands (@deffn etc.) */
+dt { color: var(--radium-green); }
+dfn, var { color: var(--molten-amber); font-style: italic; }
+
+hr { border: none; border-top: 1px solid var(--steel-blue); }

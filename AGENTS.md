@@ -28,8 +28,16 @@ Tool-agnostic conventions for AI agents working in this repository. (Claude Code
 - Concurrency designed-in (parallel `jwalk` scan).
 
 ## CLI conformance (SFRS)
-- Global flags: `--json` / `--format`, `--dry-run` / `--apply`, `--yes`, `--color`, `--no-color`.
-- JSON envelope: `{ metadata, data }` with maintainer + website; UTC `Z` timestamps.
+- Commands: `scan`, `list`, `clean`, `schema`, `describe`, `tui`. Run `vacuum schema`
+  for the authoritative, function-calling-ready contract; `vacuum describe` for a manifest.
+- Global flags: `--json` / `--format {human,json,jsonl,explore}`, `--fields`, `--apply`,
+  `--purge`, `--yes`/`--force`, `--verbose`/`-v`, `--quiet`/`-q`, `--color`, `--no-color`.
+- JSON envelope: `{ metadata, data }` with maintainer + website; UTC `Z` timestamps;
+  compact when piped, pretty on a TTY; optional fields omitted when absent.
+- Errors (machine mode): `{ "error": { code, exit_code, message, hint, timestamp,
+  command, docs_url } }` on stderr; `hint` is a runnable recovery command. stdout stays data-only.
+- Canonical exit codes: `0` ok · `1` failure · `2` usage · `3` not-found · `4` refused/permission ·
+  `5` conflict · `127` missing tool.
 - Agent env detection (`AI_AGENT`, `AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT`, `GEMINI_CLI`)
   suppresses the TUI and prefers machine output.
 

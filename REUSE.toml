@@ -11,3 +11,14 @@ path = "**"
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# The Texinfo manual is document-class, so it is CC-BY-SA-4.0 (Standard §4.1.1),
+# not software-class GPL. A later, more specific annotation wins over the `**`
+# override above, keeping the manual's REUSE metadata aligned with its
+# @copying grant. Scoped to the .texi sources so software-class build assets
+# under doc/ (e.g. spacecraft.css) stay GPL-3.0-or-later.
+[[annotations]]
+path = "doc/*.texi"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "CC-BY-SA-4.0"

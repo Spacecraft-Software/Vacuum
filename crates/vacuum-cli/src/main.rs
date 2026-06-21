@@ -11,13 +11,16 @@ mod agent;
 mod app;
 mod cli;
 mod envelope;
+mod error;
+mod introspect;
 
 use std::process::ExitCode;
 
 use clap::Parser as _;
 use mimalloc::MiMalloc;
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, Format};
+use crate::error::{CliError, CliResult};
 
 /// Microsoft Rust Guidelines M-MIMALLOC-APPS: faster allocation on hot paths.
 #[global_allocator]
@@ -26,35 +29,46 @@ static GLOBAL: MiMalloc = MiMalloc;
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let command_line = std::env::args().collect::<Vec<_>>().join(" ");
+    let mode = agent::output_mode(&cli.global);
 
-    match run(&cli, &command_line) {
-        Ok(code) => code,
-        Err(err) => {
-            eprintln!("vacuum: {err:#}");
-            ExitCode::FAILURE
-        }
+    match run(&cli, mode, &command_line) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => err.emit(mode, &command_line),
     }
 }
 
-fn run(cli: &Cli, command_line: &str) -> anyhow::Result<ExitCode> {
-    let mode = agent::output_mode(&cli.global);
+/// Launch the interactive TUI, mapping any frontend failure to a [`CliError`].
+fn launch_tui() -> CliResult<()> {
+    vacuum_tui::run().map_err(|err| CliError::tui(&err))
+}
 
-    match &cli.command {
-        Some(Command::Scan(args)) => app::run_scan(args, mode, command_line)?,
-        Some(Command::List(args)) => app::run_list(args, mode, command_line)?,
-        Some(Command::Clean(args)) => app::run_clean(args, mode, command_line)?,
-        Some(Command::Tui) => vacuum_tui::run()?,
-        None => {
-            if agent::should_launch_tui(&cli.global) {
-                vacuum_tui::run()?;
-            } else {
-                eprintln!(
-                    "vacuum: no subcommand given. Try `vacuum --help`, `vacuum scan`, or `vacuum list`."
-                );
-                return Ok(ExitCode::from(2));
+fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> {
+    // `--format explore` is an interactive request. Honor it for any data
+    // command — but never trap an agent in a render loop (SFRS §5): under an
+    // AI agent it degrades to the JSON path below with a warning.
+    if cli.global.format == Some(Format::Explore) {
+        if agent::is_agent() {
+            if !cli.global.quiet {
+                eprintln!("vacuum: --format explore is interactive; using JSON for agent use");
             }
+        } else {
+            return launch_tui();
         }
     }
 
-    Ok(ExitCode::SUCCESS)
+    match &cli.command {
+        Some(Command::Scan(args)) => app::run_scan(args, mode, &cli.global, command_line),
+        Some(Command::List(args)) => app::run_list(args, mode, &cli.global, command_line),
+        Some(Command::Clean(args)) => app::run_clean(args, mode, &cli.global, command_line),
+        Some(Command::Schema) => introspect::run_schema(),
+        Some(Command::Describe) => introspect::run_describe(mode, command_line),
+        Some(Command::Tui) => launch_tui(),
+        None => {
+            if agent::should_launch_tui(&cli.global) {
+                launch_tui()
+            } else {
+                Err(CliError::no_command())
+            }
+        }
+    }
 }

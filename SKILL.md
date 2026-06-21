@@ -1,0 +1,72 @@
+---
+name: vacuum
+description: >-
+  Fast, safe disk-space recovery for the terminal. Scans disk usage in
+  parallel, groups reclaimable space into categories (build artifacts,
+  package-manager garbage, app caches, large files), and removes selected
+  items safely — dry-run by default, XDG trash unless --purge.
+license: GPL-3.0-or-later
+homepage: https://Vacuum.SpacecraftSoftware.org/
+maintainer: Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+---
+
+<!-- SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org> -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
+# Vacuum — capability surface
+
+`vacuum` is a dual-mode (human + agent) CLI plus an interactive TUI. It conforms
+to the Spacecraft Software Dual-Mode Self-Documenting CLI Standard (SFRS v1.0.0).
+
+## Discover the surface programmatically
+
+```sh
+vacuum schema     # JSON Schema (Draft 2020-12) of every command — drops into
+                  # Anthropic input_schema / MCP inputSchema unchanged
+vacuum describe --json   # compact capability manifest (commands, categories, safety)
+```
+
+Prefer `vacuum schema` over parsing `--help`: it is the authoritative, stable
+contract.
+
+## Commands
+
+| Command | Purpose | Mutates? |
+|---------|---------|----------|
+| `vacuum scan [PATHS…] [--limit N]` | Largest consumers per path | read-only |
+| `vacuum list [--category C] [--root P]` | Reclaimable candidates by category | read-only |
+| `vacuum clean [--category C] [--root P] [--apply] [--purge] [--yes]` | Remove space | **write** (dry-run unless `--apply`) |
+| `vacuum schema` | Emit the command-surface JSON Schema | read-only |
+| `vacuum describe` | Emit the capability manifest | read-only |
+| `vacuum tui` | Launch the interactive TUI | interactive |
+
+Categories: `build-artifacts`, `package-gc`, `caches`, `large-files`.
+
+## Output contract
+
+- `--json` / `--format json` — single `{ metadata, data }` envelope; UTC `Z`
+  timestamps; compact when piped, pretty on a TTY; absent optional fields omitted.
+- `--format jsonl` — one record per line, unenveloped, for streaming.
+- `--fields a,b,c` — project records to named keys (token economy).
+- Errors in machine mode: `{ "error": { code, exit_code, message, hint, … } }`
+  on stderr, where `hint` is a runnable recovery command. stdout stays clean.
+
+## Exit codes
+
+`0` ok · `1` general failure · `2` usage error (fix args, don't retry) ·
+`3` not found · `4` permission/safety refusal · `5` conflict ·
+`127` required external tool missing.
+
+## Agent environment
+
+`AI_AGENT`, `AGENT`, or `CI` (non-empty) ⇒ JSON, no color, no TUI,
+non-interactive. `CLAUDECODE` / `CURSOR_AGENT` / `GEMINI_CLI` are informational
+only and do not change the format.
+
+## Safety (do not assume otherwise)
+
+Dry-run is the default; `--apply` is required to act and, non-interactively,
+also `--yes`/`--force`. Deletions go to the XDG trash unless `--purge`. Vacuum
+stays within `$HOME` plus explicit `--root`s, refuses protected system paths,
+never follows symlinks on delete, and never escalates privileges (it prints the
+`sudo` command for privileged GC instead).

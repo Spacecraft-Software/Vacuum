@@ -12,8 +12,17 @@ use crate::cli::{Format, GlobalArgs};
 pub enum OutputMode {
     /// Human-readable text.
     Human,
-    /// Machine-readable JSON envelope.
+    /// Machine-readable JSON envelope (single document).
     Json,
+    /// Newline-delimited JSON: one record per line.
+    Jsonl,
+}
+
+impl OutputMode {
+    /// Whether this mode emits machine-readable JSON (enveloped or streamed).
+    pub fn is_machine(self) -> bool {
+        matches!(self, Self::Json | Self::Jsonl)
+    }
 }
 
 /// Environment variables that signal an AI agent / CI is driving the CLI.
@@ -41,9 +50,14 @@ pub fn output_mode(global: &GlobalArgs) -> OutputMode {
     if global.json || global.format == Some(Format::Json) {
         return OutputMode::Json;
     }
+    if global.format == Some(Format::Jsonl) {
+        return OutputMode::Jsonl;
+    }
     if global.format == Some(Format::Human) {
         return OutputMode::Human;
     }
+    // `--format explore` requests the TUI; when that cannot run (agent/pipe) the
+    // data still has to render, so it degrades to JSON like any other pipe.
     if is_agent() || !std::io::stdout().is_terminal() {
         return OutputMode::Json;
     }
