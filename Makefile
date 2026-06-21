@@ -30,10 +30,10 @@ info: $(TEXI)
 	makeinfo --no-split $(TEXI) -o doc/vacuum.info
 
 html: $(TEXI)
-	makeinfo --html --no-split $(TEXI) -o doc/vacuum.html
+	makeinfo --html --no-split --css-include=doc/spacecraft.css $(TEXI) -o doc/vacuum.html
 
 pdf: $(TEXI)
-	texi2pdf -q -o doc/vacuum.pdf $(TEXI)
+	texi2pdf -q --texinfo=@afourpaper -o doc/vacuum.pdf $(TEXI)
 
 doc: info html pdf
 

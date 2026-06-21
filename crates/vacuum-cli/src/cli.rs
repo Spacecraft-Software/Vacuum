@@ -36,7 +36,11 @@ pub struct Cli {
 }
 
 /// Flags accepted by every subcommand.
+///
+/// Several independent on/off switches are inherent to a CLI flag surface, so
+/// the "excessive bools" lint does not apply here.
 #[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct GlobalArgs {
     /// Emit machine-readable JSON (shorthand for `--format json`).
     #[arg(long, global = true)]
@@ -46,6 +50,10 @@ pub struct GlobalArgs {
     #[arg(long, global = true, value_enum)]
     pub format: Option<Format>,
 
+    /// Restrict JSON records to these fields (comma-separated). Trims token cost.
+    #[arg(long, global = true, value_name = "F1,F2,...", value_delimiter = ',')]
+    pub fields: Vec<String>,
+
     /// Color policy.
     #[arg(long, global = true, value_enum)]
     pub color: Option<ColorMode>,
@@ -53,6 +61,14 @@ pub struct GlobalArgs {
     /// Disable color (equivalent to `--color never`).
     #[arg(long, global = true)]
     pub no_color: bool,
+
+    /// Diagnostic output to stderr.
+    #[arg(long, short = 'v', global = true)]
+    pub verbose: bool,
+
+    /// Suppress non-error stderr.
+    #[arg(long, short = 'q', global = true)]
+    pub quiet: bool,
 }
 
 /// Output format selector.
@@ -60,8 +76,12 @@ pub struct GlobalArgs {
 pub enum Format {
     /// Human-readable text.
     Human,
-    /// Machine-readable JSON envelope.
+    /// Machine-readable JSON envelope (single document).
     Json,
+    /// Newline-delimited JSON: one record per line, for streaming consumers.
+    Jsonl,
+    /// Launch the interactive TUI (falls back to JSON under an AI agent).
+    Explore,
 }
 
 /// Color policy selector.
@@ -86,6 +106,10 @@ pub enum Command {
     Clean(CleanArgs),
     /// Launch the interactive TUI.
     Tui,
+    /// Emit the JSON Schema of the command surface (for LLM function-calling).
+    Schema,
+    /// Emit a compact capability manifest.
+    Describe,
 }
 
 /// Arguments for `vacuum scan`.
@@ -127,7 +151,7 @@ pub struct CleanArgs {
     pub purge: bool,
 
     /// Skip the confirmation prompt (use with care).
-    #[arg(long, short = 'y')]
+    #[arg(long, short = 'y', visible_alias = "force")]
     pub yes: bool,
 }
 
