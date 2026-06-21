@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "vacuum-theme"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The Steelbore theme tokens (Standard §11.1) for Vacuum's TUI."
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+ratatui.workspace = true
+
+[lints]
+workspace = true

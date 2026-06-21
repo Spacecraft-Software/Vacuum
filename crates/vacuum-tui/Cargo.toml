@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "vacuum-tui"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Interactive ratatui frontend for Vacuum."
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vacuum-core.workspace = true
+vacuum-cleaners.workspace = true
+vacuum-theme.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

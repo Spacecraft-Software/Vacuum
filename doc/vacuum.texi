@@ -1,0 +1,137 @@
+\input texinfo   @c -*-texinfo-*-
+@c SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+@c SPDX-License-Identifier: GPL-3.0-or-later
+@c %**start of header
+@setfilename vacuum.info
+@documentencoding UTF-8
+@settitle Vacuum Manual
+@c %**end of header
+
+@set VERSION 0.1.0
+
+@copying
+This manual is for Vacuum (version @value{VERSION}), a fast, safe disk-space
+recovery tool for the terminal.
+
+Copyright @copyright{} 2026 Mohamed Hammad & Spacecraft Software.
+
+@quotation
+Permission is granted to copy, distribute and/or modify this document under the
+terms of the Creative Commons Attribution-ShareAlike 4.0 International License.
+@end quotation
+@end copying
+
+@dircategory System administration
+@direntry
+* Vacuum: (vacuum).             Disk-space recovery TUI/CLI.
+@end direntry
+
+@titlepage
+@title Vacuum Manual
+@subtitle For Vacuum version @value{VERSION}
+@author Mohamed Hammad
+@page
+@vskip 0pt plus 1filll
+@insertcopying
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top Vacuum
+
+@insertcopying
+@end ifnottex
+
+@menu
+* Overview::            What Vacuum does.
+* Invocation::          Commands and options.
+* Cleaner Categories::  What Vacuum reclaims.
+* Safety Model::        How Vacuum avoids data loss.
+* Attribution::         Maintainer and license.
+@end menu
+
+@node Overview
+@chapter Overview
+
+Vacuum scans disk usage in parallel, groups the reclaimable space into clear
+categories, and lets you delete what you choose. It is a command-line tool with
+an interactive terminal user interface (TUI).
+
+Run with no arguments in a terminal to launch the TUI; otherwise use the
+@command{scan}, @command{list}, and @command{clean} subcommands.
+
+@node Invocation
+@chapter Invocation
+
+@table @code
+@item vacuum
+Launch the interactive TUI (when standard output is a terminal and no AI agent
+is detected).
+
+@item vacuum scan [@var{paths}@dots{}] [--limit @var{n}]
+Report the largest consumers under each path (default: your home directory),
+largest first. Equivalent to @samp{du --max-depth=1 | sort -rh}.
+
+@item vacuum list [--category @var{cat}@dots{}] [--root @var{path}@dots{}]
+List reclaimable candidates by category. Read-only.
+
+@item vacuum clean [--category @var{cat}@dots{}] [--root @var{path}@dots{}] [--apply] [--purge] [--yes]
+Remove reclaimable space. Without @option{--apply} this is a dry run.
+Deletions go to the trash unless @option{--purge} is given. Use @option{--yes}
+to skip the confirmation prompt (required for non-interactive use).
+@end table
+
+Global options: @option{--json} (or @option{--format json}) emits a
+machine-readable envelope with ISO@tie{}8601 UTC timestamps; @option{--color}
+and @option{--no-color} control color.
+
+@node Cleaner Categories
+@chapter Cleaner Categories
+
+@table @asis
+@item Dev build artifacts (@code{build-artifacts})
+Regenerable build output: Rust @file{target/} (with a sibling
+@file{Cargo.toml}), @file{node_modules}, @file{dist}, @file{build},
+@file{__pycache__}, and similar.
+
+@item Package-manager garbage (@code{package-gc})
+Garbage collection run through each tool: @command{nix-collect-garbage -d},
+@command{flatpak uninstall --unused}, @command{journalctl --vacuum-size},
+container pruning. Offered only when the tool is installed.
+
+@item App / user caches (@code{caches})
+@file{~/.cache}, per-application Flatpak caches, and Electron/Chromium caches.
+
+@item Large files (@code{large-files})
+The biggest individual files, surfaced for manual review.
+@end table
+
+@node Safety Model
+@chapter Safety Model
+
+Vacuum is conservative by design:
+
+@itemize @bullet
+@item Dry run by default; nothing is removed without @option{--apply}.
+@item Path removals go to the XDG trash unless @option{--purge} is given.
+@item Operation is bounded to your home directory plus any paths you name;
+protected system locations are refused.
+@item Symlinks are never followed when deleting, and source files are never
+removed.
+@item Commands that require root are never escalated; the exact @command{sudo}
+command is reported for you to run.
+@end itemize
+
+@node Attribution
+@chapter Attribution
+
+Maintained by Mohamed Hammad
+(@email{Mohamed.Hammad@@SpacecraftSoftware.org}).
+
+Copyright @copyright{} 2026 Mohamed Hammad & Spacecraft Software.
+License: GPL-3.0-or-later.
+@uref{https://Vacuum.SpacecraftSoftware.org/}
+
+@bye

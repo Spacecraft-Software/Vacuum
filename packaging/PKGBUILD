@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Maintainer: Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+
+pkgname=vacuum
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Fast, safe disk-space recovery for the terminal (CLI + TUI)"
+arch=('x86_64' 'aarch64')
+url="https://Vacuum.SpacecraftSoftware.org/"
+license=('GPL-3.0-or-later')
+depends=('gcc-libs')
+makedepends=('cargo' 'texinfo')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/Spacecraft-Software/Vacuum/archive/refs/tags/v$pkgver.tar.gz")
+# TODO(release): replace with the real archive checksum before tagging v$pkgver.
+sha256sums=('SKIP')
+
+build() {
+  cd "Vacuum-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --release --locked -p vacuum-cli
+  make info
+}
+
+check() {
+  cd "Vacuum-$pkgver"
+  cargo test --workspace --locked
+}
+
+package() {
+  cd "Vacuum-$pkgver"
+  install -Dm755 "target/release/vacuum" "$pkgdir/usr/bin/vacuum"
+  install -Dm644 "doc/vacuum.info" "$pkgdir/usr/share/info/vacuum.info"
+  install -Dm644 "LICENSES/GPL-3.0-or-later.txt" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+post_install() {
+  install-info /usr/share/info/vacuum.info /usr/share/info/dir 2>/dev/null || true
+}
+
+post_remove() {
+  install-info --delete /usr/share/info/vacuum.info /usr/share/info/dir 2>/dev/null || true
+}

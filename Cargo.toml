@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/vacuum-core",
+    "crates/vacuum-cleaners",
+    "crates/vacuum-theme",
+    "crates/vacuum-cli",
+    "crates/vacuum-tui",
+]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Spacecraft-Software/Vacuum"
+homepage = "https://Vacuum.SpacecraftSoftware.org/"
+description = "Fast, safe disk-space recovery for the terminal (CLI + TUI)."
+keywords = ["disk", "cleanup", "du", "tui", "cli"]
+categories = ["command-line-utilities", "filesystem"]
+
+[workspace.dependencies]
+# Internal crates
+vacuum-core = { path = "crates/vacuum-core", version = "0.1.0" }
+vacuum-cleaners = { path = "crates/vacuum-cleaners", version = "0.1.0" }
+vacuum-theme = { path = "crates/vacuum-theme", version = "0.1.0" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# Time (ISO 8601 UTC, Standard §14)
+jiff = { version = "0.2", features = ["serde"] }
+
+# Filesystem scan
+jwalk = "0.8"
+trash = "5"
+which = "7"
+
+# CLI
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+is-terminal = "0.4"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Allocator (Microsoft Rust Guidelines M-MIMALLOC-APPS)
+mimalloc = "0.1"
+
+# Test/dev
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+correctness = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Pedantic opt-outs: documentation-of-errors/panics and must-use heuristics are
+# high-noise for an application workspace; relaxed to keep `-D warnings` practical.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+# Reassigning a short status string from a literal is clearer as `x = "..".to_owned()`
+# than the `clone_into` form this lint prefers.
+assigning_clones = "allow"
+
+# Release profile: LTO + single codegen unit for throughput (Standard §3.2).
+# `-C target-cpu=native` is intentionally NOT set here: it breaks reproducible
+# and redistributable builds (§3.2.1). Enable locally via
+# `RUSTFLAGS="-C target-cpu=native"` when building for your own machine only.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

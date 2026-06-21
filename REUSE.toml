@@ -1,0 +1,13 @@
+version = 1
+
+# All of Vacuum's committed files are GPL-3.0-or-later (software-class, Standard
+# §4.1.1). `override` precedence so example SPDX tags embedded in prose
+# (README/CONTRIBUTING describing the header convention) aren't parsed as real
+# license info, and supplies the copyright in bulk. Per-file SPDX headers are
+# still present in source per the Microsoft Rust Guidelines; this annotation
+# guarantees full REUSE coverage for non-code files (license texts, configs).
+[[annotations]]
+path = "**"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "GPL-3.0-or-later"
