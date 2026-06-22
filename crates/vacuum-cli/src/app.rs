@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Subcommand implementations: `scan`, `list`, and `clean`.
+//! Subcommand implementations: `scan`, `list`, `clean`, `empty-trash`, and `tui`.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -32,6 +32,21 @@ fn resolve_roots(explicit: &[PathBuf], fallback: &[PathBuf]) -> Vec<PathBuf> {
     } else {
         explicit.to_vec()
     }
+}
+
+/// Run `vacuum tui`: launch the interactive frontend over the resolved roots.
+///
+/// Explicit command-line roots win; otherwise the precedence-resolved `fallback`
+/// (`VACUUM_ROOTS` → config file → `$HOME`) is used. The roots bound both the
+/// scan and every deletion the frontend performs (via [`vacuum_core::safety`]),
+/// exactly as they do for `list`/`clean`.
+///
+/// # Errors
+///
+/// Returns a [`CliError`] if the frontend fails to scan or to drive the terminal.
+pub fn run_tui(explicit: &[PathBuf], fallback: &[PathBuf]) -> CliResult<()> {
+    let roots = resolve_roots(explicit, fallback);
+    vacuum_tui::run(roots).map_err(|err| CliError::tui(&err))
 }
 
 /// Whether an outcome's bytes count toward reclaimed space.

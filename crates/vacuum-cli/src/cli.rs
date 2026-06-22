@@ -112,8 +112,8 @@ pub enum Command {
     Clean(CleanArgs),
     /// Permanently empty the OS trash (dry-run unless `--apply`).
     EmptyTrash(EmptyTrashArgs),
-    /// Launch the interactive TUI.
-    Tui,
+    /// Launch the interactive TUI over the given roots (defaults to `$HOME`).
+    Tui(TuiArgs),
     /// Emit the JSON Schema of the command surface (for LLM function-calling).
     Schema,
     /// Emit a compact capability manifest.
@@ -137,6 +137,28 @@ pub struct ScanArgs {
 }
 
 impl ScanArgs {
+    /// The explicit roots to scan: positional paths plus any `--root` flags.
+    pub fn explicit_roots(&self) -> Vec<PathBuf> {
+        let mut roots = self.paths.clone();
+        roots.extend(self.roots.iter().cloned());
+        roots
+    }
+}
+
+/// Arguments for `vacuum tui`.
+#[derive(Debug, Args)]
+pub struct TuiArgs {
+    /// Roots to scan. Defaults to the configured/default roots (`VACUUM_ROOTS`,
+    /// then the config file, then `$HOME`).
+    pub paths: Vec<PathBuf>,
+
+    /// Additional roots to scan (repeatable). Merged with the positional paths;
+    /// accepted for parity with `scan`/`list`/`clean`.
+    #[arg(long = "root", value_name = "PATH")]
+    pub roots: Vec<PathBuf>,
+}
+
+impl TuiArgs {
     /// The explicit roots to scan: positional paths plus any `--root` flags.
     pub fn explicit_roots(&self) -> Vec<PathBuf> {
         let mut roots = self.paths.clone();
@@ -218,5 +240,32 @@ impl CleanArgs {
         } else {
             DeleteMode::Trash
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tui_merges_positional_and_root_flags() {
+        let cli = Cli::try_parse_from(["vacuum", "tui", "/a", "--root", "/b"])
+            .expect("tui args should parse");
+        let Some(Command::Tui(args)) = cli.command else {
+            panic!("expected the tui subcommand");
+        };
+        assert_eq!(
+            args.explicit_roots(),
+            vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
+    }
+
+    #[test]
+    fn tui_without_roots_is_empty() {
+        let cli = Cli::try_parse_from(["vacuum", "tui"]).expect("bare tui should parse");
+        let Some(Command::Tui(args)) = cli.command else {
+            panic!("expected the tui subcommand");
+        };
+        assert!(args.explicit_roots().is_empty());
     }
 }

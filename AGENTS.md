@@ -31,12 +31,14 @@ Tool-agnostic conventions for AI agents working in this repository. (Claude Code
 - Commands: `scan`, `list`, `clean`, `empty-trash`, `schema`, `describe`, `tui`. Run
   `vacuum schema` for the authoritative, function-calling-ready contract; `vacuum describe`
   for a manifest. `empty-trash` permanently empties the OS trash (dry-run unless `--apply`;
-  Linux/Windows only). `scan` accepts `--root` (merged with positional paths) like `list`/`clean`.
+  Linux/Windows only). `scan` and `tui` accept `--root` (merged with positional paths) like
+  `list`/`clean`; the TUI also has a runtime directory picker (`r`) to add/remove scan roots.
 - Global flags: `--json` / `--format {human,json,jsonl,explore}`, `--fields`, `--apply`,
   `--purge`, `--yes`/`--force`, `--verbose`/`-v`, `--quiet`/`-q`, `--color`, `--no-color`,
   `--config <path>`.
-- Config (scanning commands only): default roots come from `--config`/`VACUUM_CONFIG` (TOML,
-  `roots = [...]`), else `$XDG_CONFIG_HOME/vacuum/config.toml`. Precedence for default roots:
+- Config (scanning commands `scan`/`list`/`clean`/`tui`; `empty-trash` exempt): default roots
+  come from `--config`/`VACUUM_CONFIG` (TOML, `roots = [...]`), else
+  `$XDG_CONFIG_HOME/vacuum/config.toml`. Precedence for default roots:
   CLI paths/`--root` > `VACUUM_ROOTS` env > config `roots` > `$HOME`.
 - JSON envelope: `{ metadata, data }` with maintainer + website; UTC `Z` timestamps;
   compact when piped, pretty on a TTY; optional fields omitted when absent.

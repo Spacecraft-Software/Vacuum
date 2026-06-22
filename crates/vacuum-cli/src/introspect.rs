@@ -47,7 +47,7 @@ fn selection_properties() -> Value {
         "root": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Roots to operate within. Defaults to $HOME."
+            "description": "Roots to operate within. Defaults to VACUUM_ROOTS, then the config file, then $HOME."
         }
     })
 }
@@ -135,7 +135,7 @@ fn command_schema() -> Value {
                         "paths": {
                             "type": "array",
                             "items": { "type": "string" },
-                            "description": "Paths to scan. Defaults to $HOME."
+                            "description": "Paths to scan. Defaults to VACUUM_ROOTS, then the config file, then $HOME."
                         },
                         "limit": {
                             "type": "integer",
@@ -176,6 +176,26 @@ fn command_schema() -> Value {
                 "summary": "Emit a compact capability manifest.",
                 "parameters": { "type": "object", "additionalProperties": false, "properties": {} },
                 "examples": [ "vacuum describe --json" ]
+            },
+            {
+                "name": "tui",
+                "summary": "Launch the interactive TUI over the given roots. Interactive — not for agent use.",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Roots to scan. Defaults to VACUUM_ROOTS, then the config file, then $HOME."
+                        },
+                        "root": selection_properties()["root"].clone()
+                    }
+                },
+                "examples": [
+                    "vacuum tui",
+                    "vacuum tui /spacecraft-software --root ~/code"
+                ]
             }
         ]
     })

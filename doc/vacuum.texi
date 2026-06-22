@@ -57,6 +57,7 @@ under @file{LICENSES/}.
 @menu
 * Overview::             What Vacuum does.
 * Invocation::           Commands and global options.
+* Interactive TUI::      Keys and the runtime directory picker.
 * Output Modes::         Human text, JSON envelope, JSONL, and field selection.
 * Exit Codes::           The canonical exit-code map.
 * Errors and Hints::     Structured errors with runnable next-step hints.
@@ -133,8 +134,12 @@ function-calling APIs of the major LLM providers. @xref{Agent Integration}.
 Emit a compact capability manifest: the command list, category slugs, and the
 safety defaults. Honors @option{--json}.
 
-@item vacuum tui
-Launch the interactive TUI explicitly.
+@item vacuum tui [@var{paths}@dots{}] [--root @var{path}@dots{}]
+Launch the interactive TUI explicitly. Roots may be given positionally or with
+@option{--root} (merged), exactly as for @command{scan}; with none, the
+configured or default roots are used (@pxref{Configuration}). Inside the TUI,
+press @key{r} to add or remove scan roots without relaunching.
+@xref{Interactive TUI}.
 @end table
 
 @node Global Options
@@ -208,8 +213,65 @@ The config file is read from @option{--config}, else @env{VACUUM_CONFIG}, else
 @file{~/.config/vacuum/config.toml}. A missing file at the default location is
 not an error; a path named explicitly with @option{--config} must exist. These
 defaults apply only to the scanning commands (@command{scan}, @command{list},
-@command{clean}); @command{empty-trash} operates on the OS trash and ignores
-them.
+@command{clean}, and @command{tui}); @command{empty-trash} operates on the OS
+trash and ignores them.
+
+@node Interactive TUI
+@chapter Interactive TUI
+
+Run @command{vacuum} with no arguments in a terminal, or @command{vacuum tui}
+explicitly, to launch the interactive frontend. It scans the configured or
+default roots (@pxref{Configuration}); pass roots positionally or with
+@option{--root} to scan elsewhere, for example
+@samp{vacuum tui /spacecraft-software}.
+
+The frontend lists reclaimable candidates grouped by category, with a running
+total of the current selection. Deletions are bounded by the same roots and the
+same safety guards as the command-line @command{clean} (@pxref{Safety Model}):
+choosing a root in the picker can never widen that boundary past what the CLI
+itself would allow.
+
+@section Keys
+
+@table @kbd
+@item @key{UP}/@key{DOWN}, k/j
+Move the cursor.
+@item @key{SPC}
+Toggle the highlighted candidate.
+@item a
+Toggle all candidates.
+@item r
+Open the directory picker to choose scan roots (see below).
+@item p
+Toggle purge mode (permanent deletion) versus trash mode (recoverable).
+@item @key{RET}
+Apply: delete the selected candidates after a confirmation prompt.
+@item q, @key{ESC}
+Quit.
+@end table
+
+@section Directory picker
+
+Press @key{r} to browse the filesystem and change the scanned roots without
+relaunching. The picker opens in the current working directory.
+
+@table @kbd
+@item @key{UP}/@key{DOWN}, k/j
+Move the cursor.
+@item @key{RET}, l
+Descend into the highlighted directory (the first row, @file{..}, ascends).
+@item h, @key{BACKSPACE}
+Go to the parent directory.
+@item @key{SPC}
+Add the highlighted directory as a scan root, or remove it if already chosen; a
+@samp{✓} marks the active roots.
+@item d
+Remove the highlighted directory from the root set.
+@item @key{ESC}, q
+Close the picker and re-scan with the updated roots.
+@end table
+
+Symbolic links are not followed, and unreadable directories are skipped.
 
 @node Output Modes
 @chapter Output Modes
