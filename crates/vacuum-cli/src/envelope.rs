@@ -20,6 +20,10 @@ struct Metadata {
     version: &'static str,
     command: String,
     timestamp: String,
+    /// The specific agent that invoked us, when one identified itself
+    /// (agentic-cli §4). Telemetry only — omitted when none is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invoking_agent: Option<&'static str>,
     maintainer: &'static str,
     website: &'static str,
 }
@@ -47,6 +51,7 @@ pub fn emit<T: Serialize>(command: &str, data: T) -> anyhow::Result<()> {
             version: env!("CARGO_PKG_VERSION"),
             command: command.to_owned(),
             timestamp: Timestamp::now().to_string(),
+            invoking_agent: crate::agent::invoking_agent(),
             maintainer: MAINTAINER,
             website: WEBSITE,
         },

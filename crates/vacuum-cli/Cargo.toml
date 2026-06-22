@@ -24,6 +24,7 @@ vacuum-cleaners.workspace = true
 vacuum-tui = { path = "../vacuum-tui", version = "0.1.0" }
 
 clap.workspace = true
+indicatif.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 jiff.workspace = true

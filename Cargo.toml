@@ -48,6 +48,7 @@ which = "7"
 # CLI
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 is-terminal = "0.4"
+indicatif = "0.17"
 
 # TUI
 ratatui = "0.29"
