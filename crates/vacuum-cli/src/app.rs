@@ -5,7 +5,9 @@
 
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 use serde_json::{Value, json};
 use vacuum_cleaners::cleaners_for;
@@ -243,6 +245,78 @@ struct CleanReport {
     outcomes: Vec<Outcome>,
 }
 
+/// Build a steady-tick spinner for the deletion loop, or `None` when progress
+/// must stay silent (machine modes, `--quiet`, dry runs, or no work to do).
+///
+/// indicatif draws to stderr and auto-hides when stderr is not a terminal, so
+/// stdout stays data-only and pipes never see control characters (SFRS §7). The
+/// template is uncolored, which trivially satisfies `NO_COLOR`.
+fn clean_spinner(len: usize, enabled: bool) -> Option<ProgressBar> {
+    if !enabled || len == 0 {
+        return None;
+    }
+    let style = ProgressStyle::with_template("{spinner} [{pos}/{len}] {wide_msg}")
+        .expect("static progress template is valid");
+    let bar = ProgressBar::new(len as u64).with_style(style);
+    bar.enable_steady_tick(Duration::from_millis(100));
+    Some(bar)
+}
+
+/// Act on every candidate, returning the outcomes and total reclaimed bytes.
+///
+/// When `show_progress` is set, a live spinner (above) reports the item being
+/// removed so a long deletion does not look frozen. Each candidate is a single
+/// blocking removal, so the steady tick — not a percent bar — is what proves the
+/// process is alive. Per-item skip warnings are printed above the bar via
+/// [`ProgressBar::suspend`] so the spinner line is never corrupted.
+fn execute_candidates(
+    deleter: &Deleter,
+    candidates: &[Candidate],
+    delete_mode: DeleteMode,
+    show_progress: bool,
+    quiet: bool,
+) -> (Vec<Outcome>, u64) {
+    let verb = if delete_mode == DeleteMode::Purge {
+        "Removing"
+    } else {
+        "Trashing"
+    };
+    let progress = clean_spinner(candidates.len(), show_progress);
+    let mut outcomes = Vec::new();
+    let mut reclaimed = 0_u64;
+
+    for candidate in candidates {
+        if let Some(bar) = &progress {
+            bar.set_message(format!("{verb} {}", candidate.label));
+        }
+        match deleter.execute(candidate) {
+            Ok(outcome) => {
+                if counts_bytes(outcome.action) {
+                    reclaimed += outcome.bytes;
+                }
+                outcomes.push(outcome);
+            }
+            Err(err) => {
+                if !quiet {
+                    let warn = format!("vacuum: skipping {}: {err}", candidate.label);
+                    match &progress {
+                        Some(bar) => bar.suspend(|| eprintln!("{warn}")),
+                        None => eprintln!("{warn}"),
+                    }
+                }
+            }
+        }
+        if let Some(bar) = &progress {
+            bar.inc(1);
+        }
+    }
+
+    if let Some(bar) = &progress {
+        bar.finish_and_clear();
+    }
+    (outcomes, reclaimed)
+}
+
 /// Run `vacuum clean`.
 pub fn run_clean(
     args: &CleanArgs,
@@ -283,24 +357,15 @@ pub fn run_clean(
     }
 
     let deleter = Deleter::new(delete_mode, dry_run, resolve_roots(&args.select.roots));
-    let mut outcomes = Vec::new();
-    let mut reclaimed = 0_u64;
-
-    for candidate in &candidates {
-        match deleter.execute(candidate) {
-            Ok(outcome) => {
-                if counts_bytes(outcome.action) {
-                    reclaimed += outcome.bytes;
-                }
-                outcomes.push(outcome);
-            }
-            Err(err) => {
-                if !global.quiet {
-                    eprintln!("vacuum: skipping {}: {err}", candidate.label);
-                }
-            }
-        }
-    }
+    // Show a live spinner only for real, interactive work (SFRS §7).
+    let show_progress = mode == OutputMode::Human && !global.quiet && !dry_run;
+    let (outcomes, reclaimed) = execute_candidates(
+        &deleter,
+        &candidates,
+        delete_mode,
+        show_progress,
+        global.quiet,
+    );
 
     let report = CleanReport {
         dry_run,
