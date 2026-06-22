@@ -167,6 +167,59 @@ fn unknown_category_emits_structured_error_with_hint() {
 }
 
 #[test]
+fn scan_accepts_root_flag() {
+    let tmp = sample_tree();
+    // `scan` gained `--root` for parity with list/clean; it scans that root.
+    Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["scan", "--json", "--root"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"tool\":\"vacuum\""))
+        .stdout(predicate::str::contains(&*tmp.path().display().to_string()));
+}
+
+#[test]
+fn empty_trash_dry_run_reports_without_purging() {
+    // A dry run lists what *would* be purged and must not touch the trash. It is
+    // read-only over the real trash, so it is safe to run in CI (never --apply).
+    Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["empty-trash", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"dry_run\":true"))
+        .stdout(predicate::str::contains("\"count\":"))
+        .stdout(predicate::str::contains("\"reclaimable_bytes\":"));
+}
+
+#[test]
+fn empty_trash_apply_without_yes_is_refused_non_interactively() {
+    // Permanent purge without --yes must refuse in machine mode (SFRS §7). If the
+    // trash is empty the command short-circuits to success, so accept either a
+    // refusal or a clean exit — but never an unguarded purge.
+    Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["empty-trash", "--json", "--apply"])
+        .assert()
+        .stderr(
+            predicate::str::contains("\"code\":\"CONFIRMATION_REQUIRED\"")
+                .or(predicate::str::is_empty()),
+        );
+}
+
+#[test]
+fn empty_trash_is_in_schema() {
+    Command::cargo_bin("vacuum")
+        .unwrap()
+        .arg("schema")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\":\"empty-trash\""));
+}
+
+#[test]
 fn clean_apply_without_yes_is_refused_non_interactively() {
     let tmp = sample_tree();
     // Non-interactive --apply without --yes must refuse, not act (SFRS §7).

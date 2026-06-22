@@ -69,6 +69,12 @@ pub struct GlobalArgs {
     /// Suppress non-error stderr.
     #[arg(long, short = 'q', global = true)]
     pub quiet: bool,
+
+    /// Read default scan roots from this TOML config file. Defaults to
+    /// `$XDG_CONFIG_HOME/vacuum/config.toml`. Overridden by explicit paths/roots
+    /// on the command line and by `VACUUM_ROOTS`.
+    #[arg(long, global = true, value_name = "PATH", env = "VACUUM_CONFIG")]
+    pub config: Option<PathBuf>,
 }
 
 /// Output format selector.
@@ -104,6 +110,8 @@ pub enum Command {
     List(SelectArgs),
     /// Remove reclaimable space (dry-run unless `--apply`).
     Clean(CleanArgs),
+    /// Permanently empty the OS trash (dry-run unless `--apply`).
+    EmptyTrash(EmptyTrashArgs),
     /// Launch the interactive TUI.
     Tui,
     /// Emit the JSON Schema of the command surface (for LLM function-calling).
@@ -118,9 +126,23 @@ pub struct ScanArgs {
     /// Paths to scan. Defaults to your home directory.
     pub paths: Vec<PathBuf>,
 
+    /// Additional roots to scan (repeatable). Merged with the positional paths;
+    /// accepted for parity with `list`/`clean`.
+    #[arg(long = "root", value_name = "PATH")]
+    pub roots: Vec<PathBuf>,
+
     /// How many top consumers to show per scanned path.
     #[arg(long, default_value_t = 20)]
     pub limit: usize,
+}
+
+impl ScanArgs {
+    /// The explicit roots to scan: positional paths plus any `--root` flags.
+    pub fn explicit_roots(&self) -> Vec<PathBuf> {
+        let mut roots = self.paths.clone();
+        roots.extend(self.roots.iter().cloned());
+        roots
+    }
 }
 
 /// Category and root selection shared by `list` and `clean`.
@@ -151,6 +173,19 @@ pub struct CleanArgs {
     pub purge: bool,
 
     /// Skip the confirmation prompt (use with care).
+    #[arg(long, short = 'y', visible_alias = "force")]
+    pub yes: bool,
+}
+
+/// Arguments for `vacuum empty-trash`.
+#[derive(Debug, Args)]
+pub struct EmptyTrashArgs {
+    /// Actually purge the trash. Without this, it is a dry run that only lists
+    /// what would be permanently removed.
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Skip the confirmation prompt (required for non-interactive `--apply`).
     #[arg(long, short = 'y', visible_alias = "force")]
     pub yes: bool,
 }

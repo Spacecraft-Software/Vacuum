@@ -10,9 +10,11 @@
 mod agent;
 mod app;
 mod cli;
+mod config;
 mod envelope;
 mod error;
 mod introspect;
+mod trashbin;
 
 use std::process::ExitCode;
 
@@ -57,9 +59,25 @@ fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> 
     }
 
     match &cli.command {
-        Some(Command::Scan(args)) => app::run_scan(args, mode, &cli.global, command_line),
-        Some(Command::List(args)) => app::run_list(args, mode, &cli.global, command_line),
-        Some(Command::Clean(args)) => app::run_clean(args, mode, &cli.global, command_line),
+        // Commands that operate within roots resolve the configured/default
+        // fallback once (VACUUM_ROOTS → config file → $HOME). It is computed
+        // lazily, per arm, so an unrelated command (e.g. `schema`) never fails
+        // on a malformed config it does not use.
+        Some(Command::Scan(args)) => {
+            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
+            app::run_scan(args, mode, &cli.global, &fallback, command_line)
+        }
+        Some(Command::List(args)) => {
+            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
+            app::run_list(args, mode, &cli.global, &fallback, command_line)
+        }
+        Some(Command::Clean(args)) => {
+            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
+            app::run_clean(args, mode, &cli.global, &fallback, command_line)
+        }
+        Some(Command::EmptyTrash(args)) => {
+            app::run_empty_trash(args, mode, &cli.global, command_line)
+        }
         Some(Command::Schema) => introspect::run_schema(),
         Some(Command::Describe) => introspect::run_describe(mode, command_line),
         Some(Command::Tui) => launch_tui(),
