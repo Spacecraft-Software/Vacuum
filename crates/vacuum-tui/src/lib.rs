@@ -10,6 +10,11 @@
 //! Keys: `↑/↓` or `j/k` move · `space` toggle · `a` toggle all · `r` choose
 //! roots · `p` purge mode · `enter` apply (with confirm) · `q`/`Esc` quit.
 //!
+//! Scanning and deleting run on a background thread and show a live progress
+//! overlay (an animated spinner plus, for deletion, a determinate bar). While a
+//! job runs, `esc` cancels a deletion (after the current item) or quits during a
+//! scan (the scan is read-only, so its thread is safely abandoned).
+//!
 //! The set of scanned roots is supplied by the caller (the `vacuum tui` command
 //! resolves it from the command line, `VACUUM_ROOTS`, the config file, or
 //! `$HOME`) and can be changed at runtime through the `r` directory picker. The
@@ -21,20 +26,33 @@
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Style, Stylize as _};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 use vacuum_cleaners::all_cleaners;
 use vacuum_core::{Action, Candidate, DeleteMode, Deleter, ScanContext, human_bytes, total_bytes};
 use vacuum_theme::Steelbore;
 
-/// How long to wait for input before redrawing.
+/// How long to wait for input before redrawing while idle.
 const TICK: Duration = Duration::from_millis(250);
+
+/// Redraw cadence while a background job runs: ~12 fps so the spinner animates
+/// smoothly. Used only during a job; idle redraws use [`TICK`] to stay cheap.
+const ACTIVE_TICK: Duration = Duration::from_millis(80);
+
+/// Braille spinner frames, advanced once per [`ACTIVE_TICK`] while a job runs.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// The idle status line shown once a scan completes.
+const READY: &str = "Select items to reclaim, then press enter. Press r to choose roots.";
 
 /// Launch the interactive TUI over `roots`, restoring the terminal on exit.
 ///
@@ -42,9 +60,10 @@ const TICK: Duration = Duration::from_millis(250);
 ///
 /// # Errors
 ///
-/// Returns an error if scanning or terminal I/O fails.
+/// Returns an error if terminal I/O fails. Scan failures are non-fatal and are
+/// surfaced in the UI rather than aborting.
 pub fn run(roots: Vec<PathBuf>) -> anyhow::Result<()> {
-    let mut app = App::new(roots)?;
+    let mut app = App::new(roots);
     let mut terminal = ratatui::init();
     let result = app.event_loop(&mut terminal);
     ratatui::restore();
@@ -110,6 +129,62 @@ impl Picker {
     }
 }
 
+/// Which background operation a [`Job`] is running, for labeling the overlay.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JobKind {
+    Scan,
+    Delete,
+}
+
+/// A message streamed from a background worker to the UI thread.
+enum Progress {
+    /// Scanning moved on to this category (indeterminate phase label).
+    Scanning(String),
+    /// Scan finished; install these results.
+    Scanned {
+        candidates: Vec<Candidate>,
+        rows: Vec<Row>,
+    },
+    /// About to act on a delete item: `done` already removed of `total`.
+    Deleting {
+        label: String,
+        done: usize,
+        total: usize,
+        reclaimed: u64,
+    },
+    /// Deletion finished (or was cancelled).
+    Deleted {
+        count: usize,
+        reclaimed: u64,
+        cancelled: bool,
+    },
+    /// A non-fatal note (a cleaner failed, an item was skipped, sudo needed).
+    Note(String),
+}
+
+/// An in-flight background operation that feeds the progress overlay.
+struct Job {
+    kind: JobKind,
+    rx: Receiver<Progress>,
+    /// Cooperative cancel flag the worker checks between units of work.
+    cancel: Arc<AtomicBool>,
+    /// Spinner animation frame.
+    frame: usize,
+    /// Current phase label (category being scanned, or item being deleted).
+    phase: String,
+    /// Delete progress: items removed of the total selected.
+    done: usize,
+    total: usize,
+    /// Delete progress: bytes reclaimed so far, and the selected total.
+    reclaimed: u64,
+    total_bytes: u64,
+    /// The most recent non-fatal note, shown in the overlay.
+    note: Option<String>,
+    /// Status line to set when this scan completes (`None` keeps the current
+    /// one, e.g. so a delete summary survives its automatic rescan).
+    post_status: Option<String>,
+}
+
 /// TUI application state.
 struct App {
     roots: Vec<PathBuf>,
@@ -120,66 +195,234 @@ struct App {
     purge: bool,
     confirming: bool,
     picker: Option<Picker>,
+    job: Option<Job>,
     status: String,
 }
 
 impl App {
-    fn new(roots: Vec<PathBuf>) -> anyhow::Result<Self> {
-        let (candidates, rows) = scan_all(&roots)?;
-        let selected = vec![false; candidates.len()];
-        let cursor = first_item_row(&rows);
-        Ok(Self {
+    fn new(roots: Vec<PathBuf>) -> Self {
+        let mut app = Self {
             roots,
-            candidates,
-            selected,
-            rows,
-            cursor,
+            candidates: Vec::new(),
+            selected: Vec::new(),
+            rows: Vec::new(),
+            cursor: 0,
             purge: false,
             confirming: false,
             picker: None,
-            status: "Select items to reclaim, then press enter. Press r to choose roots."
-                .to_owned(),
-        })
+            job: None,
+            status: "Scanning…".to_owned(),
+        };
+        app.start_scan(Some(READY.to_owned()));
+        app
     }
 
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         loop {
+            self.pump_job();
             terminal.draw(|frame| self.draw(frame))?;
-            if !event::poll(TICK)? {
-                continue;
+            let timeout = if self.job.is_some() {
+                ACTIVE_TICK
+            } else {
+                TICK
+            };
+            if event::poll(timeout)? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press && self.handle_key(key.code) {
+                        return Ok(());
+                    }
+                }
             }
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                if self.handle_key(key.code)? {
-                    return Ok(());
-                }
+            if let Some(job) = self.job.as_mut() {
+                job.frame = job.frame.wrapping_add(1);
             }
         }
     }
 
+    /// Drain progress from the active job, updating state and, on completion,
+    /// installing results. A finished delete chains an automatic rescan.
+    fn pump_job(&mut self) {
+        /// What the drain loop decided once the worker signalled an end.
+        enum End {
+            Running,
+            /// Scan results plus the status to set afterward.
+            Scanned(Vec<Candidate>, Vec<Row>, Option<String>),
+            /// A delete summary to show; triggers a rescan.
+            Deleted(String),
+            /// The worker vanished without a final message; just stop.
+            Aborted,
+        }
+
+        let mut outcome = End::Running;
+        if let Some(job) = self.job.as_mut() {
+            loop {
+                match job.rx.try_recv() {
+                    Ok(Progress::Scanning(label)) => job.phase = label,
+                    Ok(Progress::Deleting {
+                        label,
+                        done,
+                        total,
+                        reclaimed,
+                    }) => {
+                        job.phase = label;
+                        job.done = done;
+                        job.total = total;
+                        job.reclaimed = reclaimed;
+                    }
+                    Ok(Progress::Note(note)) => job.note = Some(note),
+                    Ok(Progress::Scanned { candidates, rows }) => {
+                        outcome = End::Scanned(candidates, rows, job.post_status.take());
+                        break;
+                    }
+                    Ok(Progress::Deleted {
+                        count,
+                        reclaimed,
+                        cancelled,
+                    }) => {
+                        let verb = if cancelled {
+                            "Cancelled — removed"
+                        } else {
+                            "Reclaimed"
+                        };
+                        let mut summary =
+                            format!("{verb} {count} item(s), freed ~{}.", human_bytes(reclaimed));
+                        if let Some(note) = &job.note {
+                            summary = format!("{summary} ({note})");
+                        }
+                        outcome = End::Deleted(summary);
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        outcome = End::Aborted;
+                        break;
+                    }
+                }
+            }
+        }
+
+        match outcome {
+            End::Running => {}
+            End::Scanned(candidates, rows, post_status) => {
+                self.job = None;
+                self.install_scan(candidates, rows);
+                if let Some(status) = post_status {
+                    self.status = status;
+                }
+            }
+            End::Deleted(summary) => {
+                self.job = None;
+                self.status = summary;
+                // Reflect what is now gone; keep the summary through the rescan.
+                self.start_scan(None);
+            }
+            End::Aborted => {
+                self.job = None;
+                self.status = "Operation ended.".to_owned();
+            }
+        }
+    }
+
+    /// Install scan results, clearing the previous selection.
+    fn install_scan(&mut self, candidates: Vec<Candidate>, rows: Vec<Row>) {
+        self.selected = vec![false; candidates.len()];
+        self.candidates = candidates;
+        self.rows = rows;
+        self.cursor = first_item_row(&self.rows);
+    }
+
+    /// Start a background scan of the active roots. `ready_status` is shown when
+    /// it completes (`None` leaves the current status untouched).
+    fn start_scan(&mut self, ready_status: Option<String>) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let rx = spawn_scan(self.roots.clone(), Arc::clone(&cancel));
+        self.job = Some(Job {
+            kind: JobKind::Scan,
+            rx,
+            cancel,
+            frame: 0,
+            phase: "Scanning…".to_owned(),
+            done: 0,
+            total: 0,
+            reclaimed: 0,
+            total_bytes: 0,
+            note: None,
+            post_status: ready_status,
+        });
+    }
+
+    /// Start a background deletion of the currently selected candidates.
+    fn start_delete(&mut self) {
+        let items: Vec<Candidate> = self
+            .candidates
+            .iter()
+            .zip(&self.selected)
+            .filter(|&(_, &selected)| selected)
+            .map(|(candidate, _)| candidate.clone())
+            .collect();
+        let total = items.len();
+        let total_bytes = total_bytes(&items);
+        let mode = if self.purge {
+            DeleteMode::Purge
+        } else {
+            DeleteMode::Trash
+        };
+        let verb = if self.purge { "Removing" } else { "Trashing" };
+        let deleter = Deleter::new(mode, false, self.roots.clone());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let rx = spawn_delete(items, deleter, verb, Arc::clone(&cancel));
+        self.job = Some(Job {
+            kind: JobKind::Delete,
+            rx,
+            cancel,
+            frame: 0,
+            phase: "Starting…".to_owned(),
+            done: 0,
+            total,
+            reclaimed: 0,
+            total_bytes,
+            note: None,
+            post_status: None,
+        });
+    }
+
     /// Handle a key press; returns `true` to quit.
-    fn handle_key(&mut self, code: KeyCode) -> anyhow::Result<bool> {
-        // The picker and the confirm prompt are modal: while either is open it
-        // intercepts every key, mirroring the existing confirm flow.
+    fn handle_key(&mut self, code: KeyCode) -> bool {
+        // While a background job runs it is modal: only cancel/quit is accepted.
+        if let Some(kind) = self.job.as_ref().map(|job| job.kind) {
+            if matches!(code, KeyCode::Esc | KeyCode::Char('q')) {
+                match kind {
+                    JobKind::Delete => {
+                        if let Some(job) = self.job.as_ref() {
+                            job.cancel.store(true, Ordering::Relaxed);
+                        }
+                        self.status = "Cancelling after the current item…".to_owned();
+                    }
+                    // A scan is read-only; quitting safely abandons its thread.
+                    JobKind::Scan => return true,
+                }
+            }
+            return false;
+        }
+
+        // The picker and the confirm prompt are modal too, mirroring each other.
         if self.picker.is_some() {
-            self.handle_picker_key(code)?;
-            return Ok(false);
+            self.handle_picker_key(code);
+            return false;
         }
 
         if self.confirming {
             if code == KeyCode::Char('y') {
-                self.apply()?;
+                self.start_delete();
             } else {
                 self.status = "Cancelled.".to_owned();
             }
             self.confirming = false;
-            return Ok(false);
+            return false;
         }
 
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(true),
+            KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Down | KeyCode::Char('j') => self.cursor_down(),
             KeyCode::Up | KeyCode::Char('k') => self.cursor_up(),
             KeyCode::Char(' ') => self.toggle_current(),
@@ -202,7 +445,7 @@ impl App {
             }
             _ => {}
         }
-        Ok(false)
+        false
     }
 
     /// Open the directory picker, starting at the current working directory.
@@ -215,7 +458,7 @@ impl App {
     }
 
     /// Route a key press while the directory picker is open.
-    fn handle_picker_key(&mut self, code: KeyCode) -> anyhow::Result<()> {
+    fn handle_picker_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Down | KeyCode::Char('j') => {
                 if let Some(picker) = self.picker.as_mut() {
@@ -233,12 +476,10 @@ impl App {
             KeyCode::Char('d' | 'x') => self.picker_remove_root(),
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.picker = None;
-                self.rescan()?;
-                self.status = format!("Scanning {} root(s). Press r to change.", self.roots.len());
+                self.start_scan(Some(READY.to_owned()));
             }
             _ => {}
         }
-        Ok(())
     }
 
     /// Descend into the highlighted directory (or ascend through `..`).
@@ -335,51 +576,6 @@ impl App {
             .sum()
     }
 
-    fn apply(&mut self) -> anyhow::Result<()> {
-        let mode = if self.purge {
-            DeleteMode::Purge
-        } else {
-            DeleteMode::Trash
-        };
-        let deleter = Deleter::new(mode, false, self.roots.clone());
-
-        let mut reclaimed = 0_u64;
-        let mut count = 0_usize;
-        for (candidate, selected) in self.candidates.iter().zip(&self.selected) {
-            if !*selected {
-                continue;
-            }
-            match deleter.execute(candidate) {
-                Ok(outcome) => {
-                    if matches!(outcome.action, Action::Trashed | Action::Purged) {
-                        reclaimed += outcome.bytes;
-                        count += 1;
-                    } else if outcome.action == Action::NeedsSudo {
-                        // Surface the sudo command rather than silently skipping.
-                        self.status = outcome.note.unwrap_or_else(|| "needs root".to_owned());
-                    }
-                }
-                Err(err) => self.status = format!("skipped: {err}"),
-            }
-        }
-
-        let verb = if self.purge { "Deleted" } else { "Trashed" };
-        self.status = format!("{verb} {count} item(s), freed ~{}.", human_bytes(reclaimed));
-
-        // Rescan so the list reflects what is now gone.
-        self.rescan()
-    }
-
-    /// Re-scan the active roots and rebuild the row layout, clearing selection.
-    fn rescan(&mut self) -> anyhow::Result<()> {
-        let (candidates, rows) = scan_all(&self.roots)?;
-        self.selected = vec![false; candidates.len()];
-        self.candidates = candidates;
-        self.rows = rows;
-        self.cursor = first_item_row(&self.rows);
-        Ok(())
-    }
-
     fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
         let base = Style::new()
@@ -414,7 +610,10 @@ impl App {
 
         frame.render_widget(self.footer(base), chunks[2]);
 
-        if let Some(picker) = self.picker.as_ref() {
+        // A running job takes the screen; the picker cannot be open during one.
+        if let Some(job) = self.job.as_ref() {
+            Self::draw_progress(frame, job, base);
+        } else if let Some(picker) = self.picker.as_ref() {
             self.draw_picker(frame, picker, base);
         }
     }
@@ -478,6 +677,77 @@ impl App {
         };
 
         Paragraph::new(vec![mode, selection, keys, status]).style(base)
+    }
+
+    /// Render the progress overlay for the active background job.
+    fn draw_progress(frame: &mut Frame, job: &Job, base: Style) {
+        // 60% wide, 30% tall: a compact band centered over the list.
+        let area = centered_rect(60, 30, frame.area());
+        frame.render_widget(Clear, area);
+
+        let title = match job.kind {
+            JobKind::Scan => " Scanning ",
+            JobKind::Delete => " Working ",
+        };
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .title(title)
+            .style(base.fg(Steelbore::ACCENT));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+        let spinner = SPINNER[job.frame % SPINNER.len()];
+        let phase =
+            Paragraph::new(format!("{spinner}  {}", job.phase)).style(base.fg(Steelbore::INFO));
+        frame.render_widget(phase, chunks[0]);
+
+        match job.kind {
+            JobKind::Delete => {
+                let stats = format!(
+                    "[{}/{}]  freed {} of {}",
+                    job.done,
+                    job.total,
+                    human_bytes(job.reclaimed),
+                    human_bytes(job.total_bytes)
+                );
+                frame.render_widget(Paragraph::new(stats).style(base), chunks[1]);
+
+                let ratio = progress_ratio(job.done, job.total, job.reclaimed, job.total_bytes);
+                let gauge = Gauge::default()
+                    .gauge_style(
+                        Style::new()
+                            .fg(Steelbore::SUCCESS)
+                            .bg(Steelbore::BACKGROUND),
+                    )
+                    .ratio(ratio);
+                frame.render_widget(gauge, chunks[2]);
+
+                frame.render_widget(
+                    Paragraph::new("esc to cancel").style(base.fg(Steelbore::ACCENT)),
+                    chunks[3],
+                );
+            }
+            JobKind::Scan => {
+                if let Some(note) = job.note.as_ref() {
+                    frame.render_widget(
+                        Paragraph::new(note.clone()).style(base.fg(Steelbore::ERROR)),
+                        chunks[1],
+                    );
+                }
+                frame.render_widget(
+                    Paragraph::new("esc to quit").style(base.fg(Steelbore::ACCENT)),
+                    chunks[3],
+                );
+            }
+        }
     }
 
     /// Render the directory-picker overlay centered over the main screen.
@@ -553,6 +823,23 @@ fn first_item_row(rows: &[Row]) -> usize {
         .unwrap_or(0)
 }
 
+/// The fill ratio (0.0–1.0) for the delete gauge: by bytes when the selection
+/// has a measured size, else by item count, else empty.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "gauge ratio tolerates f64 rounding of large byte/item counts"
+)]
+fn progress_ratio(done: usize, total: usize, reclaimed: u64, total_bytes: u64) -> f64 {
+    let ratio = if total_bytes > 0 {
+        reclaimed as f64 / total_bytes as f64
+    } else if total > 0 {
+        done as f64 / total as f64
+    } else {
+        0.0
+    };
+    ratio.clamp(0.0, 1.0)
+}
+
 /// A stable comparison key for a root path: its canonical form when resolvable,
 /// otherwise the path as given (so unresolvable paths still compare by value).
 fn canonical_key(path: &Path) -> PathBuf {
@@ -619,37 +906,99 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     .split(vertical[1])[1]
 }
 
-/// Scan every cleaner over `roots` and build the row layout.
-fn scan_all(roots: &[PathBuf]) -> anyhow::Result<(Vec<Candidate>, Vec<Row>)> {
-    let ctx = ScanContext {
-        roots: roots.to_vec(),
-    };
-    let mut candidates = Vec::new();
-    let mut rows = Vec::new();
-
-    for cleaner in all_cleaners() {
-        let found = cleaner.scan(&ctx)?;
-        if found.is_empty() {
-            continue;
+/// Spawn a worker that scans `roots`, streaming per-category progress and the
+/// final candidate list. The thread is abandoned on quit; send failures (a
+/// dropped receiver) are ignored. `cancel` stops it before the next cleaner.
+fn spawn_scan(roots: Vec<PathBuf>, cancel: Arc<AtomicBool>) -> Receiver<Progress> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let ctx = ScanContext { roots };
+        let mut candidates = Vec::new();
+        let mut rows = Vec::new();
+        for cleaner in all_cleaners() {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let _ = tx.send(Progress::Scanning(cleaner.category().title().to_owned()));
+            match cleaner.scan(&ctx) {
+                Ok(found) => {
+                    if found.is_empty() {
+                        continue;
+                    }
+                    rows.push(Row::Header {
+                        title: cleaner.category().title().to_owned(),
+                        total: total_bytes(&found),
+                    });
+                    for candidate in found {
+                        rows.push(Row::Item {
+                            index: candidates.len(),
+                        });
+                        candidates.push(candidate);
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(Progress::Note(format!("scan: {err}")));
+                }
+            }
         }
-        rows.push(Row::Header {
-            title: cleaner.category().title().to_owned(),
-            total: total_bytes(&found),
-        });
-        for candidate in found {
-            rows.push(Row::Item {
-                index: candidates.len(),
+        let _ = tx.send(Progress::Scanned { candidates, rows });
+    });
+    rx
+}
+
+/// Spawn a worker that deletes `items` in order, streaming per-item progress.
+/// `cancel` stops it after the current item; send failures are ignored.
+fn spawn_delete(
+    items: Vec<Candidate>,
+    deleter: Deleter,
+    verb: &'static str,
+    cancel: Arc<AtomicBool>,
+) -> Receiver<Progress> {
+    let (tx, rx) = mpsc::channel();
+    let total = items.len();
+    std::thread::spawn(move || {
+        let mut reclaimed = 0_u64;
+        let mut count = 0_usize;
+        let mut cancelled = false;
+        for (done, candidate) in items.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                cancelled = true;
+                break;
+            }
+            let _ = tx.send(Progress::Deleting {
+                label: format!("{verb} {}", candidate.label),
+                done,
+                total,
+                reclaimed,
             });
-            candidates.push(candidate);
+            match deleter.execute(candidate) {
+                Ok(outcome) => {
+                    if matches!(outcome.action, Action::Trashed | Action::Purged) {
+                        reclaimed += outcome.bytes;
+                        count += 1;
+                    } else if outcome.action == Action::NeedsSudo {
+                        let _ = tx.send(Progress::Note(
+                            outcome.note.unwrap_or_else(|| "needs root".to_owned()),
+                        ));
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(Progress::Note(format!("skipped: {err}")));
+                }
+            }
         }
-    }
-
-    Ok((candidates, rows))
+        let _ = tx.send(Progress::Deleted {
+            count,
+            reclaimed,
+            cancelled,
+        });
+    });
+    rx
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{read_subdirs, toggle_root};
+    use super::{progress_ratio, read_subdirs, toggle_root};
     use std::fs;
     use std::path::PathBuf;
 
@@ -686,5 +1035,17 @@ mod tests {
         assert_eq!(roots.len(), 1, "first toggle adds the root");
         toggle_root(&mut roots, &target);
         assert!(roots.is_empty(), "second toggle removes the root");
+    }
+
+    #[test]
+    fn progress_ratio_prefers_bytes_then_items() {
+        // Bytes-based when a measured total exists.
+        assert!((progress_ratio(1, 4, 50, 100) - 0.5).abs() < 1e-9);
+        // Falls back to item count when no bytes are measured.
+        assert!((progress_ratio(2, 4, 0, 0) - 0.5).abs() < 1e-9);
+        // Nothing to do yet.
+        assert!(progress_ratio(0, 0, 0, 0).abs() < 1e-9);
+        // Over-100% is clamped.
+        assert!((progress_ratio(5, 4, 150, 100) - 1.0).abs() < 1e-9);
     }
 }

@@ -46,7 +46,9 @@ Categories: `build-artifacts`, `package-gc`, `caches`, `large-files`.
 The TUI accepts roots like the scanning commands and adds an in-app directory
 picker: press `r` to browse the filesystem and add/remove scan roots at runtime
 (space toggles a root, `esc` re-scans). Deletions stay bounded by the same roots
-and safety guards as `clean`.
+and safety guards as `clean`. Scanning and deleting run on a background thread
+with a live progress overlay (spinner + bar); `esc` cancels a deletion (after the
+current item) or quits a scan.
 
 ## Configuration (scanning commands)
 

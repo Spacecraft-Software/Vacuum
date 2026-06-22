@@ -273,6 +273,16 @@ Close the picker and re-scan with the updated roots.
 
 Symbolic links are not followed, and unreadable directories are skipped.
 
+@section Progress
+
+Scanning and deleting run on a background thread, so the interface stays
+responsive and shows a live progress overlay instead of freezing. Scanning
+displays an animated spinner naming the category in progress; deleting adds a
+determinate bar with the item count and bytes reclaimed of the selected total.
+While a job runs, @key{ESC} (or @kbd{q}) cancels a deletion after the current
+item completes, or quits during a scan (scanning is read-only, so its worker is
+safely abandoned). A finished deletion re-scans automatically.
+
 @node Output Modes
 @chapter Output Modes
 
