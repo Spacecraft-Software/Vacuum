@@ -39,16 +39,22 @@ contract.
 | `vacuum empty-trash [--apply] [--yes]` | Permanently empty the OS trash | **write** (dry-run unless `--apply`; Linux/Windows) |
 | `vacuum schema` | Emit the command-surface JSON Schema | read-only |
 | `vacuum describe` | Emit the capability manifest | read-only |
-| `vacuum tui` | Launch the interactive TUI | interactive |
+| `vacuum tui [PATHS…] [--root P]` | Launch the interactive TUI over the given roots | interactive |
 
 Categories: `build-artifacts`, `package-gc`, `caches`, `large-files`.
+
+The TUI accepts roots like the scanning commands and adds an in-app directory
+picker: press `r` to browse the filesystem and add/remove scan roots at runtime
+(space toggles a root, `esc` re-scans). Deletions stay bounded by the same roots
+and safety guards as `clean`.
 
 ## Configuration (scanning commands)
 
 Default scan roots persist in a TOML file (`roots = ["~/projects", …]`) at
 `--config`/`VACUUM_CONFIG`, else `$XDG_CONFIG_HOME/vacuum/config.toml`. Default-root
 precedence: CLI paths/`--root` > `VACUUM_ROOTS` env > config `roots` > `$HOME`.
-`empty-trash` ignores these (it acts on the OS trash, not a scan root).
+These apply to `scan`, `list`, `clean`, and `tui`; `empty-trash` ignores them (it
+acts on the OS trash, not a scan root).
 
 ## Output contract
 

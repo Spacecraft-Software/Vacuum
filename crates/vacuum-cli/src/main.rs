@@ -39,11 +39,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Launch the interactive TUI, mapping any frontend failure to a [`CliError`].
-fn launch_tui() -> CliResult<()> {
-    vacuum_tui::run().map_err(|err| CliError::tui(&err))
-}
-
 fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> {
     // `--format explore` is an interactive request. Honor it for any data
     // command — but never trap an agent in a render loop (SFRS §5): under an
@@ -54,7 +49,8 @@ fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> 
                 eprintln!("vacuum: --format explore is interactive; using JSON for agent use");
             }
         } else {
-            return launch_tui();
+            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
+            return app::run_tui(&[], &fallback);
         }
     }
 
@@ -80,10 +76,14 @@ fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> 
         }
         Some(Command::Schema) => introspect::run_schema(),
         Some(Command::Describe) => introspect::run_describe(mode, command_line),
-        Some(Command::Tui) => launch_tui(),
+        Some(Command::Tui(args)) => {
+            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
+            app::run_tui(&args.explicit_roots(), &fallback)
+        }
         None => {
             if agent::should_launch_tui(&cli.global) {
-                launch_tui()
+                let fallback = config::fallback_roots(cli.global.config.as_deref())?;
+                app::run_tui(&[], &fallback)
             } else {
                 Err(CliError::no_command())
             }
