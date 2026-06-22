@@ -52,6 +52,69 @@ fn selection_properties() -> Value {
     })
 }
 
+/// The `clean` command's schema entry (extracted to keep `command_schema` lean).
+fn clean_command() -> Value {
+    json!({
+        "name": "clean",
+        "summary": "Remove reclaimable space. Dry-run unless --apply; trash unless --purge.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "category": selection_properties()["category"].clone(),
+                "root": selection_properties()["root"].clone(),
+                "apply": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Actually act. Without it, the run is a dry run."
+                },
+                "purge": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Delete permanently instead of moving to trash."
+                },
+                "yes": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip confirmation (required for non-interactive --apply)."
+                }
+            }
+        },
+        "examples": [
+            "vacuum clean --category build-artifacts --json",
+            "vacuum clean --category caches --apply --yes --json"
+        ]
+    })
+}
+
+/// The `empty-trash` command's schema entry.
+fn empty_trash_command() -> Value {
+    json!({
+        "name": "empty-trash",
+        "summary": "Permanently empty the OS trash. Dry-run unless --apply.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "apply": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Actually purge. Without it, the run is a dry run."
+                },
+                "yes": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip confirmation (required for non-interactive --apply)."
+                }
+            }
+        },
+        "examples": [
+            "vacuum empty-trash --json",
+            "vacuum empty-trash --apply --yes --json"
+        ]
+    })
+}
+
 /// Build the full command-surface schema (raw JSON Schema, Anthropic/MCP-ready).
 fn command_schema() -> Value {
     json!({
@@ -100,37 +163,8 @@ fn command_schema() -> Value {
                     "vacuum list --category build-artifacts --json --fields label,bytes"
                 ]
             },
-            {
-                "name": "clean",
-                "summary": "Remove reclaimable space. Dry-run unless --apply; trash unless --purge.",
-                "parameters": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "category": selection_properties()["category"].clone(),
-                        "root": selection_properties()["root"].clone(),
-                        "apply": {
-                            "type": "boolean",
-                            "default": false,
-                            "description": "Actually act. Without it, the run is a dry run."
-                        },
-                        "purge": {
-                            "type": "boolean",
-                            "default": false,
-                            "description": "Delete permanently instead of moving to trash."
-                        },
-                        "yes": {
-                            "type": "boolean",
-                            "default": false,
-                            "description": "Skip confirmation (required for non-interactive --apply)."
-                        }
-                    }
-                },
-                "examples": [
-                    "vacuum clean --category build-artifacts --json",
-                    "vacuum clean --category caches --apply --yes --json"
-                ]
-            },
+            clean_command(),
+            empty_trash_command(),
             {
                 "name": "schema",
                 "summary": "Emit this JSON Schema of the command surface.",
@@ -166,7 +200,7 @@ pub fn run_describe(mode: OutputMode, command_line: &str) -> CliResult<()> {
     let manifest = json!({
         "tool": "vacuum",
         "summary": "Fast, safe disk-space recovery for the terminal.",
-        "commands": ["scan", "list", "clean", "schema", "describe", "tui"],
+        "commands": ["scan", "list", "clean", "empty-trash", "schema", "describe", "tui"],
         "categories": category_slugs(),
         "safety": {
             "dry_run_default": true,
@@ -183,7 +217,7 @@ pub fn run_describe(mode: OutputMode, command_line: &str) -> CliResult<()> {
         }
         OutputMode::Human => {
             println!("vacuum — fast, safe disk-space recovery for the terminal.");
-            println!("\nCommands: scan, list, clean, schema, describe, tui");
+            println!("\nCommands: scan, list, clean, empty-trash, schema, describe, tui");
             println!("Categories: {}", category_slugs().join(", "));
             println!("\nSafety: dry-run by default, trash unless --purge, never follows symlinks,");
             println!("never escalates privileges. Run `vacuum schema` for the full surface.");

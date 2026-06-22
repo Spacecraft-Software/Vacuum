@@ -10,6 +10,7 @@
 //! object `{ "error": { … } }`; in human mode it is a short `vacuum: …` line
 //! plus a `hint:` line. stdout is never touched on the error path.
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use is_terminal::IsTerminal as _;
@@ -76,12 +77,85 @@ impl CliError {
     }
 
     /// A destructive run refused for want of confirmation (exit 1).
-    pub fn confirmation_required(verb: &str) -> Self {
+    ///
+    /// `retry_hint` is the exact command to re-run non-interactively — it differs
+    /// per subcommand (`clean` vs `empty-trash`), so the caller supplies it.
+    pub fn confirmation_required(verb: &str, retry_hint: impl Into<String>) -> Self {
         Self {
             code: "CONFIRMATION_REQUIRED",
             exit_code: 1,
             message: format!("refusing to {verb} without confirmation in non-interactive mode"),
-            hint: "vacuum clean --apply --yes  # add --purge for permanent deletion".to_owned(),
+            hint: retry_hint.into(),
+        }
+    }
+
+    /// A config file that exists but cannot be parsed as TOML (exit 2 — the
+    /// user must fix the file; retrying verbatim will not help).
+    pub fn config_invalid(path: &Path, detail: &str) -> Self {
+        Self::usage(
+            "CONFIG_INVALID",
+            format!("invalid config at {}: {detail}", path.display()),
+            format!(
+                "$EDITOR {}   # expected TOML, e.g. roots = [\"~/projects\"]",
+                path.display()
+            ),
+        )
+    }
+
+    /// An explicitly named config file (`--config`/`VACUUM_CONFIG`) that does
+    /// not exist (exit 2). A *default*-location miss is not an error.
+    pub fn config_not_found(path: &Path) -> Self {
+        Self::usage(
+            "CONFIG_NOT_FOUND",
+            format!("config file not found: {}", path.display()),
+            format!(
+                "printf 'roots = [\"~/projects\"]\\n' > {}   # create it, or drop --config",
+                path.display()
+            ),
+        )
+    }
+
+    /// A config file that exists but cannot be read (permissions, I/O) (exit 1).
+    pub fn config_unreadable(path: &Path, detail: &str) -> Self {
+        Self {
+            code: "CONFIG_UNREADABLE",
+            exit_code: 1,
+            message: format!("cannot read config at {}: {detail}", path.display()),
+            hint: format!("eza -l {}   # check the file's permissions", path.display()),
+        }
+    }
+
+    /// A failure talking to the OS trash backend, e.g. listing or purging (exit 1).
+    pub fn trash(detail: &str) -> Self {
+        Self {
+            code: "TRASH_ERROR",
+            exit_code: 1,
+            message: format!("trash operation failed: {detail}"),
+            hint: "vacuum empty-trash   # retry; if it persists, empty the trash from your file manager"
+                .to_owned(),
+        }
+    }
+
+    /// An operation the current platform's trash backend cannot perform (exit 1).
+    ///
+    /// The `trash` crate exposes listing/emptying only on Linux/Freedesktop and
+    /// Windows; macOS and others fall here. Compiled only on those platforms, so
+    /// it is not dead code on the supported (Linux/Windows) build.
+    #[cfg(not(any(
+        windows,
+        all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        )
+    )))]
+    pub fn unsupported(operation: &str) -> Self {
+        Self {
+            code: "UNSUPPORTED_PLATFORM",
+            exit_code: 1,
+            message: format!("{operation} is not supported on this platform"),
+            hint: "vacuum list   # trash listing/emptying needs Linux or Windows".to_owned(),
         }
     }
 
@@ -113,6 +187,14 @@ impl CliError {
             message: format!("interactive interface failed: {err:#}"),
             hint: "vacuum list   # use the non-interactive CLI instead".to_owned(),
         }
+    }
+
+    /// The one-line, human-readable description of what went wrong.
+    ///
+    /// Used to fold a sub-operation failure into a larger run's per-item warning
+    /// without surfacing the full structured error.
+    pub fn message(&self) -> &str {
+        &self.message
     }
 
     /// Render the error to stderr in the active mode and return its exit code.

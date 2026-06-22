@@ -12,19 +12,23 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use vacuum_cleaners::cleaners_for;
 use vacuum_core::{
-    Action, Candidate, DeleteMode, Deleter, Outcome, ScanContext, Usage, human_bytes, safety, scan,
+    Action, Candidate, DeleteMode, Deleter, Outcome, ScanContext, Usage, human_bytes, scan,
     total_bytes,
 };
 
 use crate::agent::OutputMode;
-use crate::cli::{CleanArgs, GlobalArgs, ScanArgs, SelectArgs};
+use crate::cli::{CleanArgs, EmptyTrashArgs, GlobalArgs, ScanArgs, SelectArgs};
 use crate::envelope;
 use crate::error::{CliError, CliResult};
+use crate::trashbin;
 
-/// Resolve explicit roots, falling back to the user's home directory.
-fn resolve_roots(explicit: &[PathBuf]) -> Vec<PathBuf> {
+/// Resolve explicit roots, falling back to the configured/default roots.
+///
+/// `fallback` is the precedence-resolved default (`VACUUM_ROOTS` → config file →
+/// `$HOME`) computed once per run; explicit command-line roots always win.
+fn resolve_roots(explicit: &[PathBuf], fallback: &[PathBuf]) -> Vec<PathBuf> {
     if explicit.is_empty() {
-        safety::default_roots()
+        fallback.to_vec()
     } else {
         explicit.to_vec()
     }
@@ -90,9 +94,10 @@ pub fn run_scan(
     args: &ScanArgs,
     mode: OutputMode,
     global: &GlobalArgs,
+    fallback: &[PathBuf],
     command_line: &str,
 ) -> CliResult<()> {
-    let roots = resolve_roots(&args.paths);
+    let roots = resolve_roots(&args.explicit_roots(), fallback);
     let mut report = ScanReport { roots: Vec::new() };
 
     for root in roots {
@@ -160,12 +165,12 @@ struct CategoryGroup {
 }
 
 /// Gather candidates for the selected categories within the selected roots.
-fn gather(select: &SelectArgs) -> CliResult<Vec<CategoryGroup>> {
+fn gather(select: &SelectArgs, fallback: &[PathBuf]) -> CliResult<Vec<CategoryGroup>> {
     let categories = select
         .selected_categories()
         .map_err(CliError::unknown_category)?;
     let ctx = ScanContext {
-        roots: resolve_roots(&select.roots),
+        roots: resolve_roots(&select.roots, fallback),
     };
 
     let mut groups = Vec::new();
@@ -186,9 +191,10 @@ pub fn run_list(
     args: &SelectArgs,
     mode: OutputMode,
     global: &GlobalArgs,
+    fallback: &[PathBuf],
     command_line: &str,
 ) -> CliResult<()> {
-    let groups = gather(args)?;
+    let groups = gather(args, fallback)?;
     let grand_total: u64 = groups.iter().map(|group| group.total_bytes).sum();
 
     match mode {
@@ -322,9 +328,10 @@ pub fn run_clean(
     args: &CleanArgs,
     mode: OutputMode,
     global: &GlobalArgs,
+    fallback: &[PathBuf],
     command_line: &str,
 ) -> CliResult<()> {
-    let groups = gather(&args.select)?;
+    let groups = gather(&args.select, fallback)?;
     let candidates: Vec<Candidate> = groups
         .into_iter()
         .flat_map(|group| group.candidates)
@@ -352,11 +359,18 @@ pub fn run_clean(
             candidates.len()
         );
         if mode.is_machine() || !confirm(&prompt) {
-            return Err(CliError::confirmation_required(verb));
+            return Err(CliError::confirmation_required(
+                verb,
+                "vacuum clean --apply --yes  # add --purge for permanent deletion",
+            ));
         }
     }
 
-    let deleter = Deleter::new(delete_mode, dry_run, resolve_roots(&args.select.roots));
+    let deleter = Deleter::new(
+        delete_mode,
+        dry_run,
+        resolve_roots(&args.select.roots, fallback),
+    );
     // Show a live spinner only for real, interactive work (SFRS §7).
     let show_progress = mode == OutputMode::Human && !global.quiet && !dry_run;
     let (outcomes, reclaimed) = execute_candidates(
@@ -418,6 +432,176 @@ pub fn run_clean(
             );
             if report.dry_run {
                 println!("Re-run with --apply to act (add --purge for permanent deletion).");
+            }
+        }
+    }
+    Ok(())
+}
+
+// --- empty-trash ---------------------------------------------------------
+
+/// A trashed entry as rendered in `empty-trash` output.
+#[derive(Debug, Serialize)]
+struct TrashRecord {
+    name: String,
+    original_path: String,
+    bytes: Option<u64>,
+    deleted_at: Option<String>,
+}
+
+impl From<&trashbin::Entry> for TrashRecord {
+    fn from(entry: &trashbin::Entry) -> Self {
+        Self {
+            name: entry.name.clone(),
+            original_path: entry.original_path.clone(),
+            bytes: entry.bytes,
+            deleted_at: entry.deleted_at.clone(),
+        }
+    }
+}
+
+/// Permanently purge every entry, returning the purged subset and the reclaimed
+/// byte total.
+///
+/// Mirrors [`execute_candidates`]: one removal at a time so the spinner reports
+/// progress and a single backend failure is isolated (skipped with a warning)
+/// rather than aborting the whole sweep.
+fn purge_entries(
+    entries: &[trashbin::Entry],
+    show_progress: bool,
+    quiet: bool,
+) -> (Vec<&trashbin::Entry>, u64) {
+    let progress = clean_spinner(entries.len(), show_progress);
+    let mut purged = Vec::new();
+    let mut reclaimed = 0_u64;
+
+    for entry in entries {
+        if let Some(bar) = &progress {
+            bar.set_message(format!("Removing {}", entry.name));
+        }
+        match trashbin::purge(entry) {
+            Ok(()) => {
+                reclaimed += entry.bytes.unwrap_or(0);
+                purged.push(entry);
+            }
+            Err(err) => {
+                if !quiet {
+                    let warn = format!("vacuum: skipping {}: {}", entry.name, err.message());
+                    match &progress {
+                        Some(bar) => bar.suspend(|| eprintln!("{warn}")),
+                        None => eprintln!("{warn}"),
+                    }
+                }
+            }
+        }
+        if let Some(bar) = &progress {
+            bar.inc(1);
+        }
+    }
+
+    if let Some(bar) = &progress {
+        bar.finish_and_clear();
+    }
+    (purged, reclaimed)
+}
+
+/// Run `vacuum empty-trash`.
+pub fn run_empty_trash(
+    args: &EmptyTrashArgs,
+    mode: OutputMode,
+    global: &GlobalArgs,
+    command_line: &str,
+) -> CliResult<()> {
+    let entries = trashbin::list()?;
+    let dry_run = !args.apply;
+    // Best-effort: directories report an entry count rather than a byte size,
+    // so they contribute to the item count but not to the byte total.
+    let reclaimable_bytes: u64 = entries.iter().filter_map(|entry| entry.bytes).sum();
+
+    // Emptying the trash is permanent. Guard real purges behind confirmation;
+    // non-interactive callers must pass --yes (machine mode cannot prompt).
+    if !dry_run && !args.yes && !entries.is_empty() {
+        let prompt = format!(
+            "About to permanently delete {} item(s) (~{}) from the trash. Continue?",
+            entries.len(),
+            human_bytes(reclaimable_bytes)
+        );
+        if mode.is_machine() || !confirm(&prompt) {
+            return Err(CliError::confirmation_required(
+                "empty the trash",
+                "vacuum empty-trash --apply --yes",
+            ));
+        }
+    }
+
+    // Purge one entry at a time so the spinner can report progress and a single
+    // failure does not abort the rest of the sweep.
+    let show_progress = mode == OutputMode::Human && !global.quiet && !dry_run;
+    let (purged, reclaimed) = if dry_run {
+        (Vec::new(), 0)
+    } else {
+        purge_entries(&entries, show_progress, global.quiet)
+    };
+
+    // A dry run reports what *would* be purged; after --apply, what actually was.
+    let records: Vec<TrashRecord> = if dry_run {
+        entries.iter().map(TrashRecord::from).collect()
+    } else {
+        purged.iter().copied().map(TrashRecord::from).collect()
+    };
+    let report_bytes = if dry_run {
+        reclaimable_bytes
+    } else {
+        reclaimed
+    };
+
+    match mode {
+        OutputMode::Json => {
+            let data = json!({
+                "dry_run": dry_run,
+                "count": records.len(),
+                "reclaimable_bytes": report_bytes,
+                "items": records.iter()
+                    .map(|record| project(record, &global.fields)).collect::<Vec<_>>(),
+            });
+            envelope::emit(command_line, &data).map_err(|err| CliError::internal(&err))?;
+        }
+        OutputMode::Jsonl => {
+            let rows: Vec<Value> = records
+                .iter()
+                .map(|record| project(record, &global.fields))
+                .collect();
+            emit_jsonl(&rows)?;
+        }
+        OutputMode::Human => {
+            if records.is_empty() {
+                println!("Trash is already empty.");
+            } else {
+                for record in &records {
+                    let size = match record.bytes {
+                        Some(0) | None => "  unknown".to_owned(),
+                        Some(bytes) => human_bytes(bytes),
+                    };
+                    println!("  {size:>10}  {}", record.name);
+                }
+                let suffix = if dry_run { " (dry run)" } else { "" };
+                // Directories report no byte size, so the total is a lower bound
+                // whenever any are present — say so rather than imply it is exact.
+                let dir_items = records.iter().filter(|r| r.bytes.is_none()).count();
+                let qualifier = if dir_items > 0 { "at least " } else { "" };
+                println!(
+                    "\n{} reclaimable: {qualifier}{}{suffix}",
+                    if dry_run { "Would free" } else { "Freed" },
+                    human_bytes(report_bytes)
+                );
+                if dir_items > 0 {
+                    println!(
+                        "({dir_items} item(s) are directories whose size the trash does not report.)"
+                    );
+                }
+                if dry_run {
+                    println!("Re-run with --apply to permanently empty the trash.");
+                }
             }
         }
     }

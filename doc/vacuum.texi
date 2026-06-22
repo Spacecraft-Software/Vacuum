@@ -75,9 +75,10 @@ an interactive terminal user interface (TUI), built to be equally comfortable
 for a human at a prompt and for an AI agent driving it over a pipe.
 
 Run with no arguments in a terminal to launch the TUI; otherwise use the
-@command{scan}, @command{list}, and @command{clean} subcommands. Two further
-subcommands, @command{schema} and @command{describe}, let a program discover the
-command surface without parsing help text.
+@command{scan}, @command{list}, and @command{clean} subcommands, plus
+@command{empty-trash} to reclaim space from items already sent to the trash. Two
+further subcommands, @command{schema} and @command{describe}, let a program
+discover the command surface without parsing help text.
 
 Vacuum is conservative by default: it never removes anything without an explicit
 @option{--apply}, it routes deletions to the trash unless you ask to purge, and
@@ -87,8 +88,9 @@ it refuses to touch protected system paths. @xref{Safety Model}.
 @chapter Invocation
 
 @menu
-* Subcommands::          scan, list, clean, schema, describe, tui.
+* Subcommands::          scan, list, clean, empty-trash, schema, describe, tui.
 * Global Options::       Flags accepted by every subcommand.
+* Configuration::        Persistent default scan roots.
 @end menu
 
 @node Subcommands
@@ -99,9 +101,11 @@ it refuses to touch protected system paths. @xref{Safety Model}.
 Launch the interactive TUI (when standard output is a terminal and no AI agent
 is detected). Equivalent to @command{vacuum tui}.
 
-@item vacuum scan [@var{paths}@dots{}] [--limit @var{n}]
+@item vacuum scan [@var{paths}@dots{}] [--root @var{path}@dots{}] [--limit @var{n}]
 Report the largest consumers under each path (default: your home directory),
 largest first. Equivalent in spirit to @samp{du --max-depth=1 | sort -rh}.
+Directories may be given positionally or with @option{--root} (the two are
+merged), for parity with @command{list} and @command{clean}.
 
 @item vacuum list [--category @var{cat}@dots{}] [--root @var{path}@dots{}]
 List reclaimable candidates by category. Read-only.
@@ -111,6 +115,14 @@ Remove reclaimable space. Without @option{--apply} this is a dry run.
 Deletions go to the trash unless @option{--purge} is given. Use @option{--yes}
 (alias @option{--force}) to skip the confirmation prompt; this is required for
 non-interactive use. @xref{Safety Model}.
+
+@item vacuum empty-trash [--apply] [--yes]
+Permanently empty the operating-system trash, reclaiming the space held by
+items previously sent there by @command{vacuum clean} (or anything else).
+Without @option{--apply} this is a dry run that only lists what would be
+removed; @option{--yes} (alias @option{--force}) skips the confirmation prompt
+and is required for non-interactive use. This operation is irreversible and is
+available on Linux/Freedesktop and Windows only. @xref{Safety Model}.
 
 @item vacuum schema
 Emit a JSON Schema (Draft 2020-12) of the whole command surface on standard
@@ -154,10 +166,50 @@ Emit diagnostic detail to standard error.
 @item --quiet
 @itemx -q
 Suppress non-error standard-error output, such as per-item skip warnings.
+
+@item --config @var{path}
+Read default scan roots from this TOML config file (environment variable
+@env{VACUUM_CONFIG}). @xref{Configuration}.
 @end table
 
 Timestamps in JSON output are always ISO@tie{}8601 UTC with a mandatory @code{Z}
 suffix (Standard @t{§14}); local-time rendering never appears in machine output.
+
+@node Configuration
+@section Configuration
+
+Vacuum needs no configuration: with no paths given it scans your home directory.
+To avoid retyping the same roots, record them once in a TOML config file. The
+@code{roots} key is a list of directories; a leading @code{~} expands to your
+home directory.
+
+@example
+# ~/.config/vacuum/config.toml
+roots = ["~/projects", "~/Downloads", "/data/scratch"]
+@end example
+
+The default scan roots are resolved with the following precedence, highest
+first:
+
+@enumerate
+@item
+Paths or @option{--root} given on the command line.
+@item
+The @env{VACUUM_ROOTS} environment variable (an OS-path-separated list, e.g.
+@samp{~/a:~/b} on Unix).
+@item
+The @code{roots} key of the config file.
+@item
+Your home directory (@env{HOME}).
+@end enumerate
+
+The config file is read from @option{--config}, else @env{VACUUM_CONFIG}, else
+@file{$XDG_CONFIG_HOME/vacuum/config.toml}, else
+@file{~/.config/vacuum/config.toml}. A missing file at the default location is
+not an error; a path named explicitly with @option{--config} must exist. These
+defaults apply only to the scanning commands (@command{scan}, @command{list},
+@command{clean}); @command{empty-trash} operates on the OS trash and ignores
+them.
 
 @node Output Modes
 @chapter Output Modes

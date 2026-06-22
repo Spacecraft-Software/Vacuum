@@ -33,14 +33,22 @@ contract.
 
 | Command | Purpose | Mutates? |
 |---------|---------|----------|
-| `vacuum scan [PATHS…] [--limit N]` | Largest consumers per path | read-only |
+| `vacuum scan [PATHS…] [--root P] [--limit N]` | Largest consumers per path | read-only |
 | `vacuum list [--category C] [--root P]` | Reclaimable candidates by category | read-only |
 | `vacuum clean [--category C] [--root P] [--apply] [--purge] [--yes]` | Remove space | **write** (dry-run unless `--apply`) |
+| `vacuum empty-trash [--apply] [--yes]` | Permanently empty the OS trash | **write** (dry-run unless `--apply`; Linux/Windows) |
 | `vacuum schema` | Emit the command-surface JSON Schema | read-only |
 | `vacuum describe` | Emit the capability manifest | read-only |
 | `vacuum tui` | Launch the interactive TUI | interactive |
 
 Categories: `build-artifacts`, `package-gc`, `caches`, `large-files`.
+
+## Configuration (scanning commands)
+
+Default scan roots persist in a TOML file (`roots = ["~/projects", …]`) at
+`--config`/`VACUUM_CONFIG`, else `$XDG_CONFIG_HOME/vacuum/config.toml`. Default-root
+precedence: CLI paths/`--root` > `VACUUM_ROOTS` env > config `roots` > `$HOME`.
+`empty-trash` ignores these (it acts on the OS trash, not a scan root).
 
 ## Output contract
 
