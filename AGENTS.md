@@ -33,6 +33,8 @@ Tool-agnostic conventions for AI agents working in this repository. (Claude Code
   for a manifest. `empty-trash` permanently empties the OS trash (dry-run unless `--apply`;
   Linux/Windows only). `scan` and `tui` accept `--root` (merged with positional paths) like
   `list`/`clean`; the TUI also has a runtime directory picker (`r`) to add/remove scan roots.
+  TUI scanning/deleting run on a background thread with a live progress overlay (spinner + bar);
+  `esc` cancels a deletion (after the current item) or quits a scan.
 - Global flags: `--json` / `--format {human,json,jsonl,explore}`, `--fields`, `--apply`,
   `--purge`, `--yes`/`--force`, `--verbose`/`-v`, `--quiet`/`-q`, `--color`, `--no-color`,
   `--config <path>`.
