@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Structured CLI errors: canonical exit codes (SFRS §4) and tips-thinking
+//! Structured CLI errors: canonical exit codes (the CLI Standard §4) and tips-thinking
 //! hints (agentic-cli §3).
 //!
 //! Every failure carries a stable `code`, a canonical `exit_code`, a one-line
@@ -31,7 +31,7 @@ const DOCS_URL: &str = "https://Vacuum.SpacecraftSoftware.org/";
 pub struct CliError {
     /// Stable `SCREAMING_SNAKE_CASE` error code.
     code: &'static str,
-    /// Canonical POSIX-friendly exit code (SFRS §4).
+    /// Canonical POSIX-friendly exit code (the CLI Standard §4).
     exit_code: u8,
     /// One-line, human-readable description of what went wrong.
     message: String,
@@ -39,7 +39,7 @@ pub struct CliError {
     hint: String,
 }
 
-/// The on-the-wire shape of the JSON error object (SFRS §1.8).
+/// The on-the-wire shape of the JSON error object (the CLI Standard §1.8).
 #[derive(Serialize)]
 struct ErrorBody<'a> {
     code: &'a str,
@@ -223,7 +223,7 @@ impl CliError {
             },
         };
         // Pretty only when a human is watching a terminal; compact otherwise so
-        // agents paying for tokens are not billed for whitespace (SFRS §8).
+        // agents paying for tokens are not billed for whitespace (the CLI Standard §8).
         let rendered = if std::io::stderr().is_terminal() {
             serde_json::to_string_pretty(&envelope)
         } else {

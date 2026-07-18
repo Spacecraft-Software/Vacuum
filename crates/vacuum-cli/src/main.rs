@@ -41,7 +41,7 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> {
     // `--format explore` is an interactive request. Honor it for any data
-    // command — but never trap an agent in a render loop (SFRS §5): under an
+    // command — but never trap an agent in a render loop (the CLI Standard §5): under an
     // AI agent it degrades to the JSON path below with a warning.
     if cli.global.format == Some(Format::Explore) {
         if agent::is_agent() {

@@ -27,7 +27,7 @@ Tool-agnostic conventions for AI agents working in this repository. (Claude Code
 - `jiff` UTC `Z` for all timestamps.
 - Concurrency designed-in (parallel `jwalk` scan).
 
-## CLI conformance (SFRS)
+## CLI conformance (the CLI Standard)
 - Commands: `scan`, `list`, `clean`, `empty-trash`, `schema`, `describe`, `tui`. Run
   `vacuum schema` for the authoritative, function-calling-ready contract; `vacuum describe`
   for a manifest. `empty-trash` permanently empties the OS trash (dry-run unless `--apply`;

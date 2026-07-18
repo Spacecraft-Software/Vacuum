@@ -16,7 +16,7 @@ maintainer: Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 # Vacuum — capability surface
 
 `vacuum` is a dual-mode (human + agent) CLI plus an interactive TUI. It conforms
-to the Spacecraft Software Dual-Mode Self-Documenting CLI Standard (SFRS v1.0.0).
+to the Spacecraft Software Dual-Mode Self-Documenting CLI Standard (v1.0.0).
 
 ## Discover the surface programmatically
 

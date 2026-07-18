@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The SFRS JSON output envelope (`{ metadata, data }`).
+//! The CLI Standard's JSON output envelope (`{ metadata, data }`).
 
 use std::io::IsTerminal as _;
 
@@ -39,7 +39,7 @@ struct Envelope<T: Serialize> {
 ///
 /// The timestamp is ISO 8601 UTC with a `Z` suffix (Standard §14). Output is
 /// pretty-printed only when stdout is a terminal; piped/agent consumers get
-/// compact JSON so they are not billed for whitespace (SFRS §8.6).
+/// compact JSON so they are not billed for whitespace (the CLI Standard §8.6).
 ///
 /// # Errors
 ///

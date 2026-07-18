@@ -59,7 +59,7 @@ fn counts_bytes(action: Action) -> bool {
 
 /// Project a record onto `fields`, dropping the rest. An empty field list
 /// returns the record whole. Non-object records pass through untouched
-/// (token-economy hygiene, SFRS §8).
+/// (token-economy hygiene, the CLI Standard §8).
 fn project<T: Serialize>(record: &T, fields: &[String]) -> Value {
     let value = serde_json::to_value(record).unwrap_or(Value::Null);
     if fields.is_empty() {
@@ -270,7 +270,7 @@ struct CleanReport {
 /// must stay silent (machine modes, `--quiet`, dry runs, or no work to do).
 ///
 /// indicatif draws to stderr and auto-hides when stderr is not a terminal, so
-/// stdout stays data-only and pipes never see control characters (SFRS §7). The
+/// stdout stays data-only and pipes never see control characters (the CLI Standard §7). The
 /// template is uncolored, which trivially satisfies `NO_COLOR`.
 fn clean_spinner(len: usize, enabled: bool) -> Option<ProgressBar> {
     if !enabled || len == 0 {
@@ -386,7 +386,7 @@ pub fn run_clean(
         dry_run,
         resolve_roots(&args.select.roots, fallback),
     );
-    // Show a live spinner only for real, interactive work (SFRS §7).
+    // Show a live spinner only for real, interactive work (the CLI Standard §7).
     let show_progress = mode == OutputMode::Human && !global.quiet && !dry_run;
     let (outcomes, reclaimed) = execute_candidates(
         &deleter,

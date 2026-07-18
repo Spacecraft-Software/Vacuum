@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Self-documenting introspection: `vacuum schema` and `vacuum describe`
-//! (SFRS §2 Rule 4).
+//! (the CLI Standard §2 Rule 4).
 //!
 //! `schema` emits a JSON Schema (Draft 2020-12) of the command surface — the
 //! per-command `parameters` objects drop directly into the Anthropic / MCP
@@ -18,7 +18,7 @@ use crate::agent::OutputMode;
 use crate::envelope;
 use crate::error::{CliError, CliResult};
 
-/// The canonical exit-code map (SFRS §4), surfaced through introspection.
+/// The canonical exit-code map (the CLI Standard §4), surfaced through introspection.
 fn exit_codes() -> Value {
     json!({
         "0": "success",

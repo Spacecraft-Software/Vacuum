@@ -154,7 +154,7 @@ fn clean_apply_purge_removes() {
 
 #[test]
 fn unknown_category_emits_structured_error_with_hint() {
-    // Usage errors exit 2 and carry a runnable hint (SFRS §4, agentic §3).
+    // Usage errors exit 2 and carry a runnable hint (the CLI Standard §4, agentic §3).
     Command::cargo_bin("vacuum")
         .unwrap()
         .args(["list", "--json", "--category", "not-a-category"])
@@ -196,7 +196,7 @@ fn empty_trash_dry_run_reports_without_purging() {
 
 #[test]
 fn empty_trash_apply_without_yes_is_refused_non_interactively() {
-    // Permanent purge without --yes must refuse in machine mode (SFRS §7). If the
+    // Permanent purge without --yes must refuse in machine mode (the CLI Standard §7). If the
     // trash is empty the command short-circuits to success, so accept either a
     // refusal or a clean exit — but never an unguarded purge.
     Command::cargo_bin("vacuum")
@@ -222,7 +222,7 @@ fn empty_trash_is_in_schema() {
 #[test]
 fn clean_apply_without_yes_is_refused_non_interactively() {
     let tmp = sample_tree();
-    // Non-interactive --apply without --yes must refuse, not act (SFRS §7).
+    // Non-interactive --apply without --yes must refuse, not act (the CLI Standard §7).
     Command::cargo_bin("vacuum")
         .unwrap()
         .args([

@@ -58,7 +58,7 @@ pub struct Outcome {
     pub action: Action,
     /// Optional human-readable detail (e.g. the `sudo` command to run).
     ///
-    /// Omitted from JSON output when absent (token-economy hygiene, SFRS §8).
+    /// Omitted from JSON output when absent (token-economy hygiene, the CLI Standard §8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

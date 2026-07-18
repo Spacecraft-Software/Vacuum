@@ -128,7 +128,7 @@ pub struct Candidate {
     pub label: String,
     /// Optional extra detail (e.g. why it is safe to remove).
     ///
-    /// Omitted from JSON output when absent (token-economy hygiene, SFRS §8).
+    /// Omitted from JSON output when absent (token-economy hygiene, the CLI Standard §8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// Estimated bytes reclaimed; `0` when the amount cannot be measured ahead

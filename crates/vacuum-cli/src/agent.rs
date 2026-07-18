@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Output-mode and TUI-launch resolution, including AI-agent detection (SFRS).
+//! Output-mode and TUI-launch resolution, including AI-agent detection (the CLI Standard).
 
 use is_terminal::IsTerminal as _;
 
