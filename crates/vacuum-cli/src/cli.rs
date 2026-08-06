@@ -174,9 +174,22 @@ pub struct SelectArgs {
     #[arg(long = "category", value_name = "CATEGORY")]
     pub categories: Vec<String>,
 
+    /// Restrict to these cleaners by id (repeatable). Defaults to all.
+    ///
+    /// Finer-grained than `--category`: several cleaners can share a category,
+    /// and their candidates may deliberately overlap. `--cleaner cargo-prune`
+    /// takes only the per-unit Cargo prune, leaving the whole-directory
+    /// build-artifacts candidate alone. `vacuum describe` lists the ids.
+    #[arg(long = "cleaner", value_name = "ID")]
+    pub cleaners: Vec<String>,
+
     /// Roots to operate within (repeatable). Defaults to your home directory.
     #[arg(long = "root", value_name = "PATH")]
     pub roots: Vec<PathBuf>,
+
+    /// Days of disuse after which a build artifact counts as stale (default 30).
+    #[arg(long = "stale-days", value_name = "DAYS")]
+    pub stale_days: Option<u64>,
 }
 
 /// Arguments for `vacuum clean`.

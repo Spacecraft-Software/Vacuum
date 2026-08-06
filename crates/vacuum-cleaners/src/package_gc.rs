@@ -22,6 +22,14 @@ const RECIPES: &[Recipe] = &[
         "Delete dead Nix store paths and old generations (user profile).",
     ),
     (
+        // The user-profile form above cannot reach the system profile or other
+        // users' roots; on NixOS that is usually where the bulk of the store is.
+        "nix-collect-garbage",
+        &["-d", "--verbose"],
+        true,
+        "Delete dead Nix store paths and old generations system-wide (all profiles).",
+    ),
+    (
         "flatpak",
         &["uninstall", "--unused", "-y"],
         false,
@@ -35,9 +43,24 @@ const RECIPES: &[Recipe] = &[
     ),
     (
         "journalctl",
+        &["--vacuum-time=7d"],
+        true,
+        "Drop systemd journal entries older than 7 days.",
+    ),
+    (
+        "journalctl",
         &["--vacuum-size=200M"],
         true,
         "Trim the systemd journal to 200 MiB.",
+    ),
+    (
+        // The counterpart to the temp-files cleaner: that one handles entries
+        // owned by the invoking user, this reclaims the root-owned remainder
+        // under the policy in `tmpfiles.d`.
+        "systemd-tmpfiles",
+        &["--clean"],
+        true,
+        "Remove expired temp files owned by root, per tmpfiles.d policy.",
     ),
     (
         "podman",
@@ -89,6 +112,7 @@ impl Cleaner for PackageGc {
                 detail: Some(detail.to_owned()),
                 bytes: 0, // Reclaim is unknown until the tool runs.
                 regenerable: true,
+                trash_ok: true,
                 risk: Risk::Caution,
                 target: Target::Command { spec },
             });

@@ -70,6 +70,7 @@ impl Cleaner for BuildArtifacts {
                     detail: Some("regenerable build output".to_owned()),
                     bytes,
                     regenerable: true,
+                    trash_ok: true,
                     risk: Risk::Safe,
                     target: Target::Path { path },
                 });
@@ -97,14 +98,12 @@ mod tests {
         fs::write(proj.join("Cargo.toml"), b"[package]").unwrap();
         fs::write(proj.join("target/artifact"), vec![0_u8; 4096]).unwrap();
 
-        let ctx = ScanContext {
-            roots: vec![tmp.path().to_path_buf()],
-        };
+        let ctx = ScanContext::new(vec![tmp.path().to_path_buf()]);
         let found = BuildArtifacts.scan(&ctx).unwrap();
         assert_eq!(found.len(), 1);
         match &found[0].target {
             Target::Path { path } => assert_eq!(path.file_name().unwrap(), "target"),
-            Target::Command { .. } => panic!("expected a path target"),
+            other => panic!("expected a path target, got {other:?}"),
         }
     }
 
@@ -114,9 +113,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("misc/target")).unwrap();
         fs::write(tmp.path().join("misc/target/data"), vec![0_u8; 4096]).unwrap();
 
-        let ctx = ScanContext {
-            roots: vec![tmp.path().to_path_buf()],
-        };
+        let ctx = ScanContext::new(vec![tmp.path().to_path_buf()]);
         assert!(BuildArtifacts.scan(&ctx).unwrap().is_empty());
     }
 }

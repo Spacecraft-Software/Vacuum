@@ -38,7 +38,9 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 use vacuum_cleaners::all_cleaners;
-use vacuum_core::{Action, Candidate, DeleteMode, Deleter, ScanContext, human_bytes, total_bytes};
+use vacuum_core::{
+    Action, Candidate, Category, DeleteMode, Deleter, ScanContext, human_bytes, total_bytes,
+};
 use vacuum_theme::Steelbore;
 
 /// How long to wait for input before redrawing while idle.
@@ -144,6 +146,9 @@ enum Progress {
     Scanned {
         candidates: Vec<Candidate>,
         rows: Vec<Row>,
+        /// The scan roots widened by the cleaners' `extra_roots`, bounding every
+        /// deletion made from this scan.
+        delete_roots: Vec<PathBuf>,
     },
     /// About to act on a delete item: `done` already removed of `total`.
     Deleting {
@@ -188,6 +193,11 @@ struct Job {
 /// TUI application state.
 struct App {
     roots: Vec<PathBuf>,
+    /// The scan roots widened by the cleaners' `extra_roots`, as reported by the
+    /// most recent scan. This — not [`App::roots`] — bounds deletions, so a
+    /// temp-file candidate under `/tmp` can be acted on while every other guard
+    /// stays in force.
+    delete_roots: Vec<PathBuf>,
     candidates: Vec<Candidate>,
     selected: Vec<bool>,
     rows: Vec<Row>,
@@ -202,6 +212,7 @@ struct App {
 impl App {
     fn new(roots: Vec<PathBuf>) -> Self {
         let mut app = Self {
+            delete_roots: roots.clone(),
             roots,
             candidates: Vec::new(),
             selected: Vec::new(),
@@ -245,8 +256,9 @@ impl App {
         /// What the drain loop decided once the worker signalled an end.
         enum End {
             Running,
-            /// Scan results plus the status to set afterward.
-            Scanned(Vec<Candidate>, Vec<Row>, Option<String>),
+            /// Scan results, the delete roots they need, and the status to set
+            /// afterward.
+            Scanned(Vec<Candidate>, Vec<Row>, Vec<PathBuf>, Option<String>),
             /// A delete summary to show; triggers a rescan.
             Deleted(String),
             /// The worker vanished without a final message; just stop.
@@ -270,8 +282,13 @@ impl App {
                         job.reclaimed = reclaimed;
                     }
                     Ok(Progress::Note(note)) => job.note = Some(note),
-                    Ok(Progress::Scanned { candidates, rows }) => {
-                        outcome = End::Scanned(candidates, rows, job.post_status.take());
+                    Ok(Progress::Scanned {
+                        candidates,
+                        rows,
+                        delete_roots,
+                    }) => {
+                        outcome =
+                            End::Scanned(candidates, rows, delete_roots, job.post_status.take());
                         break;
                     }
                     Ok(Progress::Deleted {
@@ -303,9 +320,9 @@ impl App {
 
         match outcome {
             End::Running => {}
-            End::Scanned(candidates, rows, post_status) => {
+            End::Scanned(candidates, rows, delete_roots, post_status) => {
                 self.job = None;
-                self.install_scan(candidates, rows);
+                self.install_scan(candidates, rows, delete_roots);
                 if let Some(status) = post_status {
                     self.status = status;
                 }
@@ -324,10 +341,16 @@ impl App {
     }
 
     /// Install scan results, clearing the previous selection.
-    fn install_scan(&mut self, candidates: Vec<Candidate>, rows: Vec<Row>) {
+    fn install_scan(
+        &mut self,
+        candidates: Vec<Candidate>,
+        rows: Vec<Row>,
+        delete_roots: Vec<PathBuf>,
+    ) {
         self.selected = vec![false; candidates.len()];
         self.candidates = candidates;
         self.rows = rows;
+        self.delete_roots = delete_roots;
         self.cursor = first_item_row(&self.rows);
     }
 
@@ -368,7 +391,7 @@ impl App {
             DeleteMode::Trash
         };
         let verb = if self.purge { "Removing" } else { "Trashing" };
-        let deleter = Deleter::new(mode, false, self.roots.clone());
+        let deleter = Deleter::new(mode, false, self.delete_roots.clone());
         let cancel = Arc::new(AtomicBool::new(false));
         let rx = spawn_delete(items, deleter, verb, Arc::clone(&cancel));
         self.job = Some(Job {
@@ -912,28 +935,35 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 fn spawn_scan(roots: Vec<PathBuf>, cancel: Arc<AtomicBool>) -> Receiver<Progress> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let ctx = ScanContext { roots };
-        let mut candidates = Vec::new();
-        let mut rows = Vec::new();
+        let ctx = ScanContext::new(roots.clone());
+        let mut delete_roots = roots;
+        // Several cleaners can share a category, so results are collected first
+        // and only then turned into rows — one header per category, not one per
+        // cleaner.
+        let mut found: Vec<(Category, Vec<Candidate>)> = Vec::new();
+
         for cleaner in all_cleaners() {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
             let _ = tx.send(Progress::Scanning(cleaner.category().title().to_owned()));
             match cleaner.scan(&ctx) {
-                Ok(found) => {
-                    if found.is_empty() {
+                Ok(items) => {
+                    for root in cleaner.extra_roots() {
+                        if !delete_roots.contains(&root) {
+                            delete_roots.push(root);
+                        }
+                    }
+                    if items.is_empty() {
                         continue;
                     }
-                    rows.push(Row::Header {
-                        title: cleaner.category().title().to_owned(),
-                        total: total_bytes(&found),
-                    });
-                    for candidate in found {
-                        rows.push(Row::Item {
-                            index: candidates.len(),
-                        });
-                        candidates.push(candidate);
+                    let category = cleaner.category();
+                    if let Some((_, existing)) =
+                        found.iter_mut().find(|(seen, _)| *seen == category)
+                    {
+                        existing.extend(items);
+                    } else {
+                        found.push((category, items));
                     }
                 }
                 Err(err) => {
@@ -941,7 +971,35 @@ fn spawn_scan(roots: Vec<PathBuf>, cancel: Arc<AtomicBool>) -> Receiver<Progress
                 }
             }
         }
-        let _ = tx.send(Progress::Scanned { candidates, rows });
+
+        // Display in canonical category order, not the order cleaners ran in.
+        found.sort_by_key(|(category, _)| {
+            Category::ALL
+                .iter()
+                .position(|known| known == category)
+                .unwrap_or(usize::MAX)
+        });
+
+        let mut candidates = Vec::new();
+        let mut rows = Vec::new();
+        for (category, items) in found {
+            rows.push(Row::Header {
+                title: category.title().to_owned(),
+                total: total_bytes(&items),
+            });
+            for candidate in items {
+                rows.push(Row::Item {
+                    index: candidates.len(),
+                });
+                candidates.push(candidate);
+            }
+        }
+
+        let _ = tx.send(Progress::Scanned {
+            candidates,
+            rows,
+            delete_roots,
+        });
     });
     rx
 }

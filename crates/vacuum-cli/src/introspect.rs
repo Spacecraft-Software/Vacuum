@@ -12,6 +12,7 @@
 use std::io::IsTerminal as _;
 
 use serde_json::{Value, json};
+use vacuum_cleaners::all_cleaners;
 use vacuum_core::Category;
 
 use crate::agent::OutputMode;
@@ -36,6 +37,28 @@ fn category_slugs() -> Vec<&'static str> {
     Category::ALL.iter().map(|c| c.slug()).collect()
 }
 
+/// Every cleaner, derived from the catalog so the two never drift.
+///
+/// Cleaner ids are what `--cleaner` accepts, and several cleaners may share a
+/// category, so an agent cannot infer them from the category list alone.
+fn cleaner_manifest() -> Vec<Value> {
+    all_cleaners()
+        .iter()
+        .map(|cleaner| {
+            json!({
+                "id": cleaner.id(),
+                "name": cleaner.name(),
+                "category": cleaner.category().slug(),
+            })
+        })
+        .collect()
+}
+
+/// Cleaner ids alone, for schema enums.
+fn cleaner_ids() -> Vec<&'static str> {
+    all_cleaners().iter().map(|cleaner| cleaner.id()).collect()
+}
+
 /// The shared object schema for the `--category` / `--root` selectors.
 fn selection_properties() -> Value {
     json!({
@@ -48,6 +71,16 @@ fn selection_properties() -> Value {
             "type": "array",
             "items": { "type": "string" },
             "description": "Roots to operate within. Defaults to VACUUM_ROOTS, then the config file, then $HOME."
+        },
+        "cleaner": {
+            "type": "array",
+            "items": { "type": "string", "enum": cleaner_ids() },
+            "description": "Restrict to these cleaners by id. Narrower than category: several cleaners share a category and their candidates may overlap. Defaults to all."
+        },
+        "stale-days": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Days of disuse after which a build artifact counts as stale. Defaults to 30."
         }
     })
 }
@@ -222,6 +255,7 @@ pub fn run_describe(mode: OutputMode, command_line: &str) -> CliResult<()> {
         "summary": "Fast, safe disk-space recovery for the terminal.",
         "commands": ["scan", "list", "clean", "empty-trash", "schema", "describe", "tui"],
         "categories": category_slugs(),
+        "cleaners": cleaner_manifest(),
         "safety": {
             "dry_run_default": true,
             "trash_default": true,

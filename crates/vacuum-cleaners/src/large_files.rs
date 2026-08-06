@@ -41,6 +41,7 @@ impl Cleaner for LargeFiles {
                     detail: None,
                     bytes: usage.bytes,
                     regenerable: false,
+                    trash_ok: true,
                     risk: Risk::Caution,
                     target: Target::Path { path: usage.path },
                 });

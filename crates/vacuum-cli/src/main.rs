@@ -49,8 +49,8 @@ fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> 
                 eprintln!("vacuum: --format explore is interactive; using JSON for agent use");
             }
         } else {
-            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
-            return app::run_tui(&[], &fallback);
+            let settings = config::settings(cli.global.config.as_deref())?;
+            return app::run_tui(&[], &settings);
         }
     }
 
@@ -60,16 +60,16 @@ fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> 
         // lazily, per arm, so an unrelated command (e.g. `schema`) never fails
         // on a malformed config it does not use.
         Some(Command::Scan(args)) => {
-            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
-            app::run_scan(args, mode, &cli.global, &fallback, command_line)
+            let settings = config::settings(cli.global.config.as_deref())?;
+            app::run_scan(args, mode, &cli.global, &settings, command_line)
         }
         Some(Command::List(args)) => {
-            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
-            app::run_list(args, mode, &cli.global, &fallback, command_line)
+            let settings = config::settings(cli.global.config.as_deref())?;
+            app::run_list(args, mode, &cli.global, &settings, command_line)
         }
         Some(Command::Clean(args)) => {
-            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
-            app::run_clean(args, mode, &cli.global, &fallback, command_line)
+            let settings = config::settings(cli.global.config.as_deref())?;
+            app::run_clean(args, mode, &cli.global, &settings, command_line)
         }
         Some(Command::EmptyTrash(args)) => {
             app::run_empty_trash(args, mode, &cli.global, command_line)
@@ -77,13 +77,13 @@ fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> 
         Some(Command::Schema) => introspect::run_schema(),
         Some(Command::Describe) => introspect::run_describe(mode, command_line),
         Some(Command::Tui(args)) => {
-            let fallback = config::fallback_roots(cli.global.config.as_deref())?;
-            app::run_tui(&args.explicit_roots(), &fallback)
+            let settings = config::settings(cli.global.config.as_deref())?;
+            app::run_tui(&args.explicit_roots(), &settings)
         }
         None => {
             if agent::should_launch_tui(&cli.global) {
-                let fallback = config::fallback_roots(cli.global.config.as_deref())?;
-                app::run_tui(&[], &fallback)
+                let settings = config::settings(cli.global.config.as_deref())?;
+                app::run_tui(&[], &settings)
             } else {
                 Err(CliError::no_command())
             }
