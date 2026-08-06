@@ -56,6 +56,7 @@ under @file{LICENSES/}.
 
 @menu
 * Overview::             What Vacuum does.
+* Installation::         Nix, NixOS, GNU Guix System, Arch, and from source.
 * Invocation::           Commands and global options.
 * Interactive TUI::      Keys and the runtime directory picker.
 * Output Modes::         Human text, JSON envelope, JSONL, and field selection.
@@ -84,6 +85,96 @@ discover the command surface without parsing help text.
 Vacuum is conservative by default: it never removes anything without an explicit
 @option{--apply}, it routes deletions to the trash unless you ask to purge, and
 it refuses to touch protected system paths. @xref{Safety Model}.
+
+@node Installation
+@chapter Installation
+
+@quotation Warning
+Do not run @samp{cargo install vacuum}. An unrelated crate on @uref{https://crates.io,
+crates.io} holds that name (a spaceflight command-line tool). Install from the
+Vacuum repository, as described below.
+@end quotation
+
+@section Nix and NixOS
+
+The flake supplies its own Rust toolchain, so nothing is needed on the host
+beyond Nix itself with flakes enabled.
+
+@example
+nix run github:Spacecraft-Software/Vacuum
+nix profile install github:Spacecraft-Software/Vacuum
+nix build github:Spacecraft-Software/Vacuum
+@end example
+
+For a system-wide install, add the flake as an input and enable the NixOS
+module it exports:
+
+@example
+@{
+  inputs.vacuum.url = "github:Spacecraft-Software/Vacuum";
+
+  # in your NixOS configuration:
+  # imports = [ inputs.vacuum.nixosModules.default ];
+  # programs.vacuum.enable = true;
+@}
+@end example
+
+Equivalently, place the package in @code{environment.systemPackages}
+directly:
+
+@example
+environment.systemPackages =
+  [ inputs.vacuum.packages.$@{pkgs.system@}.default ];
+@end example
+
+To work on Vacuum itself, @command{nix develop} provides rustc, cargo, clippy,
+rustfmt, rust-analyzer, mold, @command{reuse}, and Texinfo.
+@command{nix flake check} builds the package and runs the test suite.
+
+@section GNU Guix System
+
+The repository ships @file{manifest.scm}, which provides the toolchain without
+installing anything on the host.
+
+@example
+git clone https://github.com/Spacecraft-Software/Vacuum
+cd Vacuum
+guix shell -m manifest.scm -- cargo install --path crates/vacuum-cli
+@end example
+
+This installs the @command{vacuum} binary into @file{~/.cargo/bin}. To obtain
+only the development environment:
+
+@example
+guix shell -m manifest.scm
+guix shell --pure -m manifest.scm
+@end example
+
+A Guix package definition exists at @file{packaging/guix.scm}, but it is not
+yet buildable. Guix's @code{cargo-build-system} resolves dependencies through
+@code{#:cargo-inputs} rather than from @file{Cargo.lock}, and this workspace
+locks 191 crates; that list is generated with @samp{guix import crate -r
+vacuum} at release time. Until then, use the @command{guix shell} route above.
+
+@section Arch Linux
+
+A @file{PKGBUILD} is provided:
+
+@example
+cd packaging && makepkg -si
+@end example
+
+@section From source
+
+Vacuum requires Rust edition 2024 with a minimum supported Rust version of
+1.85.
+
+@example
+cargo install --path crates/vacuum-cli --force
+@end example
+
+The @option{--force} flag replaces any previously installed @command{vacuum}
+binary.
 
 @node Invocation
 @chapter Invocation
