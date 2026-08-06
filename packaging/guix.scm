@@ -40,9 +40,8 @@
              "https://github.com/Spacecraft-Software/Vacuum/archive/refs/tags/v"
              version ".tar.gz"))
        (file-name (string-append name "-" version ".tar.gz"))
-       ;; TODO(release): replace with the real base32 hash before tagging.
        (sha256
-        (base32 "0000000000000000000000000000000000000000000000000000"))))
+        (base32 "02gbh9980in266q6bkyfax2azlx8gws6q7zvp0ckigy4y9abzha2"))))
     (build-system cargo-build-system)
     (arguments
      (list

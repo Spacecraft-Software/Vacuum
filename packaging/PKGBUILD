@@ -12,8 +12,7 @@ license=('GPL-3.0-or-later')
 depends=('gcc-libs')
 makedepends=('cargo' 'texinfo')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/Spacecraft-Software/Vacuum/archive/refs/tags/v$pkgver.tar.gz")
-# TODO(release): replace with the real archive checksum before tagging v$pkgver.
-sha256sums=('SKIP')
+sha256sums=('42c1bf54f2c4bf3819b8fb1f6c347fa8d3af4457cecf65b031c246805282eb09')
 
 build() {
   cd "Vacuum-$pkgver"
