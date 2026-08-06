@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: audit
+
+# Deliberately NOT a pull-request gate. Advisories are published against
+# dependencies at arbitrary times, so running this per PR would redden a change
+# for a reason unrelated to it and train everyone to ignore a red tick. A
+# schedule reports the same information without blocking unrelated work
+# (Standard section 3.3 keeps `cargo audit` a pre-dependency-change step).
+on:
+  schedule:
+    # Mondays, 07:00 UTC. Times are UTC throughout (section 14).
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+  # Re-check whenever the dependency set or the accepted-findings list changes.
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/*/Cargo.toml"
+      - ".cargo/audit.toml"
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # Accepted findings and the reasoning that justified them live in
+      # .cargo/audit.toml, which cargo-audit reads from the working directory.
+      - name: Audit
+        run: cargo audit
