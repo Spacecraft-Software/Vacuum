@@ -9,7 +9,7 @@
 @c %**end of header
 
 @set VERSION 0.1.0
-@set UPDATED 2026-06-21
+@set UPDATED 2026-08-06
 
 @copying
 This manual is for Vacuum (version @value{VERSION}, updated @value{UPDATED}), a
@@ -145,7 +145,31 @@ press @key{r} to add or remove scan roots without relaunching.
 @node Global Options
 @section Global Options
 
-These flags are accepted by every subcommand.
+@command{list} and @command{clean} additionally accept the selection flags
+below.
+
+@table @option
+@item --category @var{slug}
+Restrict to a category; repeatable. Defaults to all. @xref{Cleaner Categories}.
+
+@item --root @var{path}
+Operate within @var{path}; repeatable. Defaults to the configured roots.
+
+@item --cleaner @var{id}
+Restrict to a single cleaner by identifier; repeatable. Defaults to all.
+
+Finer-grained than @option{--category}, because several cleaners may contribute
+to one category and their candidates can deliberately overlap. For a Cargo
+project, @samp{--cleaner cargo-prune} takes only the per-unit prune and leaves
+the whole-directory candidate alone. @command{vacuum describe} lists the
+identifiers.
+
+@item --stale-days @var{n}
+Days of disuse after which a build artifact counts as stale; 30 by default.
+Overrides the @code{stale_days} configuration key. @xref{Configuration}.
+@end table
+
+The remaining flags are accepted by every subcommand.
 
 @table @option
 @item --json
@@ -191,7 +215,14 @@ home directory.
 @example
 # ~/.config/vacuum/config.toml
 roots = ["~/projects", "~/Downloads", "/data/scratch"]
+stale_days = 30
 @end example
+
+The @code{stale_days} key sets how long a build artifact must go untouched
+before it counts as stale, and defaults to 30. It is overridden by
+@option{--stale-days} on the command line. Unrecognised keys are ignored rather
+than rejected, so a file written for a newer Vacuum still loads on an older
+binary.
 
 The default scan roots are resolved with the following precedence, highest
 first:
@@ -390,17 +421,85 @@ Regenerable build output: Rust @file{target/} (with a sibling
 @file{Cargo.toml}), @file{node_modules}, @file{dist}, @file{build},
 @file{__pycache__}, and similar.
 
+This category additionally offers a @emph{prune} of dead build units from
+@emph{inside} a Cargo @file{target/} directory you wish to keep, so that a
+project still in use retains its warm incremental cache instead of paying for a
+full rebuild. The prune is performed natively: Vacuum never executes
+@command{cargo}, @command{rustup}, or @command{rustc}, which matters on a system
+whose toolchain is provided by Nix or Guix rather than rustup, where there may be
+no runnable compiler on @env{PATH} at all.
+
+Three kinds of candidate are produced per target directory:
+
+@table @asis
+@item Units from a superseded toolchain
+Every build unit records the compiler that produced it, as a hash written by
+Cargo into @file{.fingerprint/@var{unit}/*.json}. Units are grouped by that
+value; the group with the most recent activity is the toolchain in use, and the
+remaining groups are left over from a compiler no longer building this project.
+Where the version can be identified it is named (@samp{2 units from rustc
+1.95.0}); otherwise the group is described generically, and is pruned just the
+same.
+
+@item Cold units
+Units built by the toolchain still in use, but not rebuilt within
+@option{--stale-days} days (30 by default). Freshness is taken from the
+modification time of the @file{invoked.timestamp} file Cargo writes for exactly
+this purpose. Access time is deliberately never consulted: on a @code{relatime}
+mount --- the near-universal default --- it is not updated when Cargo reuses an
+artifact, so an access-time filter deletes caches that are still live.
+
+@item The incremental compilation cache
+Pure rebuild-time state, untracked by fingerprints, and frequently the largest
+single item in a target directory. Removing it costs one non-incremental
+rebuild.
+@end table
+
+Several guards apply. A profile whose @file{.cargo-lock} is held by a running
+build is skipped in its entirety. The unhashed final artifacts at a profile root
+are never removed. A unit whose fingerprint cannot be read is kept rather than
+pruned, so unrecognised data is never destroyed. Sizes count a hardlinked inode
+once, so the figure reported is the space actually recovered.
+
+These candidates cover the same tree as the whole-directory candidate for that
+target, so take one or the other rather than both. @xref{Global Options}, for
+@option{--cleaner}, which selects a single cleaner within a category.
+
 @item Package-manager garbage (@code{package-gc})
-Garbage collection run through each tool: @command{nix-collect-garbage -d},
-@command{flatpak uninstall --unused}, @command{journalctl --vacuum-size},
-container pruning. Offered only when the tool is installed.
+Garbage collection run through each tool: @command{nix-collect-garbage -d} for
+the user profile and, as a @command{sudo} line, for every profile system-wide;
+@command{flatpak uninstall --unused}; @command{journalctl --vacuum-time=7d} and
+@command{journalctl --vacuum-size=200M}; @command{systemd-tmpfiles --clean};
+and container pruning. Offered only when the tool is installed.
 
 @item App / user caches (@code{caches})
 @file{~/.cache}, per-application Flatpak caches, and Electron/Chromium caches.
 
+@item Stale temp files (@code{temp-files})
+Entries directly inside @file{/tmp}, @file{/var/tmp}, and @env{TMPDIR}. This is
+the safe counterpart to @samp{rm -r /tmp/*}, which would destroy other users'
+files and the working state of running processes. An entry is offered only when
+every one of the following holds: it is not a symbolic link; it is owned by the
+invoking user; it has not been modified for seven days; and its name is not
+session state such as @file{.X11-unix}, @file{.ICE-unix},
+@file{systemd-private-*}, @file{snap-private-*}, or @file{.Trash-*}.
+
+Root-owned leftovers are deliberately excluded, and are reclaimed instead
+through @command{sudo systemd-tmpfiles --clean}, offered under
+@code{package-gc}.
+
+Selecting this category widens the delete allowlist to cover the temporary
+directories, which lie outside the default home-directory root. Every other
+guard, including the protected-prefix list and the symlink refusal, continues to
+apply. @xref{Safety Model}.
+
 @item Large files (@code{large-files})
 The biggest individual files, surfaced for manual review.
 @end table
+
+Several cleaners may contribute to one category; output is always grouped by
+category, so each category appears exactly once regardless of how many cleaners
+fed it.
 
 @node Safety Model
 @chapter Safety Model
@@ -409,11 +508,20 @@ Vacuum is conservative by design:
 
 @itemize @bullet
 @item Dry run by default; nothing is removed without @option{--apply}.
-@item Path removals go to the XDG trash unless @option{--purge} is given.
+@item Path removals go to the XDG trash unless @option{--purge} is given. The
+one exception is a candidate whose trash directory would sit on the same
+filesystem as the candidate itself, which is the case for everything under
+@file{/tmp}: the freedesktop specification places it in
+@file{/tmp/.Trash-$uid}, so trashing would reclaim no space at all. Such
+candidates are purged instead, and the reason is stated in the output of every
+mode rather than applied silently. @option{--apply} is still required.
 @item A real @option{--apply} run refuses to act non-interactively unless
 @option{--yes} (alias @option{--force}) is supplied; interactively it prompts.
 @item Operation is bounded to your home directory plus any paths you name;
-protected system locations are refused.
+protected system locations are refused. A cleaner may declare additional
+locations it needs (the temp-file cleaner declares the temporary directories),
+and those are added to the allowlist only when that cleaner is actually
+selected.
 @item Symlinks are never followed when deleting, and source files are never
 removed.
 @item Commands that require root are never escalated; the exact @command{sudo}

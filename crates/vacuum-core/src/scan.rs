@@ -6,6 +6,7 @@
 //! Directory sizes are summed in parallel with [`jwalk`]. Symlinks are never
 //! followed, so a link can never inflate a size or escape the scanned tree.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use jwalk::WalkDir;
@@ -38,6 +39,46 @@ pub fn dir_size(path: &Path) -> u64 {
         .filter_map(|entry| entry.metadata().ok())
         .map(|meta| meta.len())
         .sum()
+}
+
+/// Sum the size of every regular file under `paths`, counting each inode once.
+///
+/// Cargo hardlinks its final artifacts into place: `target/debug/vacuum` and
+/// `target/debug/deps/vacuum-7fa5fb…` are one 63 MiB inode with two names.
+/// Summing [`std::fs::Metadata::len`] naively would report that space twice —
+/// on this workspace, a 12% over-estimate — and then claim to have freed it
+/// twice. Removing one name frees nothing until the last one goes, so only
+/// distinct `(device, inode)` pairs are counted, exactly as `du` does.
+///
+/// Symlinks are not followed. Unreadable entries are skipped.
+pub fn sum_unique_files(paths: &[PathBuf]) -> u64 {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let mut seen = HashSet::new();
+    let mut total = 0_u64;
+
+    for path in paths {
+        for entry in WalkDir::new(path)
+            .skip_hidden(false)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            // Count a multiply-linked inode only the first time it is met.
+            if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
+                continue;
+            }
+            total += meta.len();
+        }
+    }
+
+    total
 }
 
 /// List the immediate children of `root`, sized and sorted largest-first.
@@ -146,11 +187,42 @@ fn file_len(path: &Path) -> u64 {
 mod tests {
     use std::fs;
 
-    use super::{dir_size, find_pruned_dirs, largest_files, top_consumers};
+    use super::{dir_size, find_pruned_dirs, largest_files, sum_unique_files, top_consumers};
 
     fn write(path: &std::path::Path, bytes: usize) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, vec![0_u8; bytes]).unwrap();
+    }
+
+    #[test]
+    fn sum_unique_files_counts_a_hardlinked_inode_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = tmp.path().join("deps/lib-abcdef.rlib");
+        write(&original, 4096);
+        // Cargo "uplifts" its artifacts by hardlinking, not copying.
+        let uplifted = tmp.path().join("libthing.rlib");
+        fs::hard_link(&original, &uplifted).unwrap();
+
+        let paths = vec![tmp.path().to_path_buf()];
+        assert_eq!(
+            sum_unique_files(&paths),
+            4096,
+            "one inode with two names is 4096 bytes of disk, not 8192"
+        );
+        // dir_size is deliberately left naive; this documents the difference.
+        assert_eq!(dir_size(tmp.path()), 8192);
+    }
+
+    #[test]
+    fn sum_unique_files_spans_multiple_roots_without_double_counting() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&tmp.path().join("a/one"), 1000);
+        write(&tmp.path().join("b/two"), 2000);
+        let linked = tmp.path().join("b/one-link");
+        fs::hard_link(tmp.path().join("a/one"), &linked).unwrap();
+
+        let paths = vec![tmp.path().join("a"), tmp.path().join("b")];
+        assert_eq!(sum_unique_files(&paths), 3000);
     }
 
     #[test]

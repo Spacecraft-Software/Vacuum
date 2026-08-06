@@ -10,13 +10,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "The Vacuum cleaner catalog: build artifacts, package GC, caches, large files."
+description = "The Vacuum cleaner catalog: build artifacts, package GC, caches, temp files, large files."
 keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
 vacuum-core.workspace = true
 which.workspace = true
+rustix.workspace = true
+rustc-stable-hash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

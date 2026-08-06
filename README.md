@@ -15,10 +15,57 @@ The Steelbore Standard.
 
 | Category | Examples | Risk |
 |----------|----------|------|
-| **Dev build artifacts** | Rust `target/`, `node_modules`, `.next`, `dist`, `build`, `__pycache__` | Safe — fully regenerable |
-| **Package-manager garbage** | `nix-collect-garbage -d`, unused Flatpak runtimes, cargo registry cache, journald logs | Low — reclaimed by each tool |
+| **Dev build artifacts** | Rust `target/`, `node_modules`, `.next`, `dist`, `build`, `__pycache__` — plus a native prune of dead units *inside* a `target/` you want to keep | Safe — fully regenerable |
+| **Package-manager garbage** | `nix-collect-garbage -d` (user and system-wide), unused Flatpak runtimes, `journalctl --vacuum-time`, `systemd-tmpfiles --clean`, podman/docker prune | Low — reclaimed by each tool |
 | **App / user caches** | `~/.cache`, browser caches, regenerable model blobs | Low |
+| **Stale temp files** | Entries under `/tmp`, `/var/tmp`, `$TMPDIR` that are yours and untouched for 7+ days | Low — never touches live session state |
 | **Large files** | The biggest files and directories, browsed interactively | Your call |
+
+### About the Cargo prune
+
+Deleting a whole `target/` costs a full rebuild. The prune instead removes only the
+units that are already dead, so a project you are still working on keeps its warm
+cache. It runs entirely off the filesystem — Vacuum never executes `cargo`,
+`rustup`, or `rustc`, which matters on a Nix or Guix system where there may be no
+runnable toolchain on `PATH` at all.
+
+Three things are offered per target directory:
+
+- **units from an old toolchain.** Each build unit records the compiler that made
+  it. Units are grouped by that value and the group with the most recent activity
+  is the one in use; the rest are left over from a compiler you have since
+  changed. Where the version can be named it is (`2 units from rustc 1.95.0`).
+- **cold units**, not rebuilt in `--stale-days` days (default 30). Freshness comes
+  from the `invoked.timestamp` file Cargo writes for the purpose — never access
+  time, which is not updated on `relatime` mounts when Cargo reuses an artifact.
+- **the incremental cache**, which is pure rebuild-time state and often the
+  largest single item in a `target/`.
+
+Guards: a profile whose `.cargo-lock` is held by a running build is skipped
+entirely; the unhashed final binaries are never touched; a unit whose fingerprint
+cannot be read is kept, never swept; and sizes count hardlinked inodes once, so
+the reported figure is what you actually get back.
+
+These candidates overlap the whole-directory one for the same target — take one or
+the other. Use `--cleaner cargo-prune` to select only the prune:
+
+```sh
+vacuum list  --cleaner cargo-prune
+vacuum clean --cleaner cargo-prune --apply
+```
+
+### About the temp-file cleaner
+
+It is the safe replacement for `sudo rm -r /tmp/*`, which destroys other users'
+files and the live state of running processes. An entry is offered only when it is
+not a symlink, is owned by you, has gone untouched for seven days, and is not
+session state (`.X11-unix`, `systemd-private-*`, `.Trash-*`, and friends). Root-owned
+leftovers are left to `sudo systemd-tmpfiles --clean`, which Vacuum prints for you.
+
+These candidates are **purged rather than trashed**, even without `--purge`: the trash
+for a path under `/tmp` is `/tmp/.Trash-$uid`, on the same filesystem, so trashing
+would reclaim nothing at exactly the moment you need the space. Vacuum says so in
+its output rather than doing it quietly, and `--apply` is still required.
 
 ## Safety first
 

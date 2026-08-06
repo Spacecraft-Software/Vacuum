@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::error::Result;
 
-/// The four reclaimable-space categories Vacuum knows about.
+/// The reclaimable-space categories Vacuum knows about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Category {
@@ -23,16 +23,19 @@ pub enum Category {
     PackageManagerGc,
     /// Application and user caches.
     Caches,
+    /// Stale temporary files under `/tmp`, `/var/tmp`, and `$TMPDIR`.
+    TempFiles,
     /// The largest individual files, for manual review.
     LargeFiles,
 }
 
 impl Category {
     /// All categories, in display order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::BuildArtifacts,
         Self::PackageManagerGc,
         Self::Caches,
+        Self::TempFiles,
         Self::LargeFiles,
     ];
 
@@ -42,6 +45,7 @@ impl Category {
             Self::BuildArtifacts => "build-artifacts",
             Self::PackageManagerGc => "package-gc",
             Self::Caches => "caches",
+            Self::TempFiles => "temp-files",
             Self::LargeFiles => "large-files",
         }
     }
@@ -52,6 +56,7 @@ impl Category {
             Self::BuildArtifacts => "Dev build artifacts",
             Self::PackageManagerGc => "Package-manager garbage",
             Self::Caches => "App / user caches",
+            Self::TempFiles => "Stale temp files",
             Self::LargeFiles => "Large files",
         }
     }
@@ -115,6 +120,22 @@ pub enum Target {
         /// The command specification.
         spec: CommandSpec,
     },
+    /// Many paths removed as one unit, all confined beneath `root`.
+    ///
+    /// Used where a single logical reclaim spans hundreds of scattered paths —
+    /// pruning dead build units out of a Cargo `target/` directory, for
+    /// instance. Presenting those individually would bury the frontend in rows;
+    /// the batch keeps one row while still deleting at file granularity.
+    ///
+    /// Every path is safety-checked independently, exactly as a
+    /// [`Target::Path`] would be.
+    Batch {
+        /// The directory the batch is confined to. Reported to the user so the
+        /// affected project is identifiable from the row alone.
+        root: PathBuf,
+        /// The paths to remove. All lie beneath `root`.
+        paths: Vec<PathBuf>,
+    },
 }
 
 /// A single unit of reclaimable space surfaced by a cleaner.
@@ -136,17 +157,48 @@ pub struct Candidate {
     pub bytes: u64,
     /// Whether the target is fully regenerable.
     pub regenerable: bool,
+    /// Whether routing this candidate through the trash actually reclaims space.
+    ///
+    /// Normally `true`. Set to `false` for paths whose trash directory lives on
+    /// the same filesystem as the path itself — the freedesktop trash spec puts
+    /// them in `<mount>/.Trash-$uid`, so trashing frees nothing. [`Deleter`]
+    /// purges such candidates outright rather than pretending to reclaim space.
+    ///
+    /// [`Deleter`]: crate::delete::Deleter
+    pub trash_ok: bool,
     /// The review risk for this candidate.
     pub risk: Risk,
     /// What removal would actually do.
     pub target: Target,
 }
 
+/// How long a build artifact must go untouched before it is considered stale.
+///
+/// Thirty days spans a monthly work cycle: a project touched within the last
+/// month keeps its warm incremental cache, anything older is rebuilt on next
+/// use. Overridable per run via `--stale-days` or the `stale_days` config key.
+pub const DEFAULT_STALE_DAYS: u64 = 30;
+
 /// Context handed to each cleaner's [`Cleaner::scan`].
 #[derive(Debug, Clone)]
 pub struct ScanContext {
     /// The roots to scan within (defaults to the user's home directory).
     pub roots: Vec<PathBuf>,
+    /// Days of disuse after which a build artifact counts as stale.
+    pub stale_days: u64,
+}
+
+impl ScanContext {
+    /// A context over `roots` with every other setting left at its default.
+    ///
+    /// Preferred over the struct literal so that adding a setting does not break
+    /// callers that do not care about it.
+    pub fn new(roots: Vec<PathBuf>) -> Self {
+        Self {
+            roots,
+            stale_days: DEFAULT_STALE_DAYS,
+        }
+    }
 }
 
 /// A source of reclaimable-space candidates.
@@ -159,6 +211,20 @@ pub trait Cleaner {
     fn category(&self) -> Category;
     /// Inspect the system and report reclaimable candidates.
     fn scan(&self, ctx: &ScanContext) -> Result<Vec<Candidate>>;
+
+    /// Delete roots this cleaner's candidates need beyond [`ScanContext::roots`].
+    ///
+    /// Path deletions are bounded by the caller's root list (see
+    /// [`safety::check_deletable`]), which defaults to `$HOME`. A cleaner that
+    /// legitimately reports paths elsewhere — the temp-file cleaner and `/tmp`,
+    /// for instance — declares those locations here, and the frontend widens the
+    /// delete allowlist only when that cleaner is actually selected. The
+    /// protected-prefix and symlink guards still apply to every path.
+    ///
+    /// [`safety::check_deletable`]: crate::safety::check_deletable
+    fn extra_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 /// Sum the estimated reclaimable bytes across a set of candidates.

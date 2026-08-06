@@ -153,6 +153,142 @@ fn clean_apply_purge_removes() {
 }
 
 #[test]
+fn list_emits_one_group_per_category() {
+    // Build artifacts come from two cleaners (the directory sweep and
+    // the Cargo unit prune), but a category must still appear exactly once — frontends
+    // group by category, not by cleaner.
+    let tmp = sample_tree();
+    let output = Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["list", "--json", "--root"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+
+    for slug in [
+        "build-artifacts",
+        "package-gc",
+        "caches",
+        "temp-files",
+        "large-files",
+    ] {
+        let needle = format!("\"category\":\"{slug}\",\"title\"");
+        assert!(
+            stdout.matches(&needle).count() <= 1,
+            "category {slug} must head at most one group, found {} in: {stdout}",
+            stdout.matches(&needle).count()
+        );
+    }
+}
+
+#[test]
+fn temp_files_category_is_accepted() {
+    // The category must be selectable and appear in the machine-readable schema
+    // so agents can discover it.
+    Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["list", "--json", "--category", "temp-files"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"tool\":\"vacuum\""));
+
+    Command::cargo_bin("vacuum")
+        .unwrap()
+        .arg("schema")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("temp-files"));
+}
+
+#[test]
+fn privileged_gc_is_offered_as_a_sudo_line_never_executed() {
+    // Which recipes appear depends entirely on which tools are installed, so
+    // this asserts the shape rather than the contents: the group is always
+    // present, and any candidate in it is a command target whose root-requiring
+    // form is rendered as a `sudo` line for the user to run. On a machine with
+    // no GC tools at all (a clean build sandbox) the list is legitimately empty.
+    let output = Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["list", "--json", "--category", "package-gc"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+
+    assert!(
+        stdout.contains("\"category\":\"package-gc\""),
+        "the package-gc group must always be reported: {stdout}"
+    );
+    if stdout.contains("\"cleaner_id\":\"package-gc\"") {
+        assert!(
+            stdout.contains("\"kind\":\"command\""),
+            "package-gc candidates are commands, never paths: {stdout}"
+        );
+    }
+    assert!(
+        !stdout.contains("\"needs_root\":true,\"program\"") || stdout.contains("sudo "),
+        "a root-requiring recipe must render its sudo line: {stdout}"
+    );
+}
+
+#[test]
+fn stale_days_and_cleaner_filters_are_accepted() {
+    let tmp = sample_tree();
+
+    // `--stale-days 0` makes every build unit cold; it must parse and run.
+    Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["list", "--json", "--stale-days", "0", "--root"])
+        .arg(tmp.path())
+        .assert()
+        .success();
+
+    // `--cleaner` narrows within a category. Selecting only the Cargo prune
+    // must not surface the whole-directory build-artifacts candidate.
+    let output = Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["list", "--json", "--cleaner", "cargo-prune", "--root"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+    assert!(
+        !stdout.contains("\"cleaner_id\":\"build-artifacts\""),
+        "--cleaner cargo-prune must exclude the whole-directory cleaner: {stdout}"
+    );
+}
+
+#[test]
+fn cargo_prune_ignores_a_target_dir_without_a_cachedir_tag() {
+    // `sample_tree` builds a bare `proj/target` with no CACHEDIR.TAG, so it is
+    // not a real Cargo target directory and the prune must leave it alone.
+    let tmp = sample_tree();
+    let output = Command::cargo_bin("vacuum")
+        .unwrap()
+        .args(["list", "--json", "--cleaner", "cargo-prune", "--root"])
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+    assert!(
+        !stdout.contains("\"kind\":\"batch\""),
+        "no batch should be produced for a non-Cargo target dir: {stdout}"
+    );
+}
+
+#[test]
 fn unknown_category_emits_structured_error_with_hint() {
     // Usage errors exit 2 and carry a runnable hint (the CLI Standard §4, agentic §3).
     Command::cargo_bin("vacuum")

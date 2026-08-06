@@ -21,6 +21,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use vacuum_core::cleaner::DEFAULT_STALE_DAYS;
 use vacuum_core::safety;
 
 use crate::error::{CliError, CliResult};
@@ -38,6 +39,9 @@ pub struct Config {
     /// Default roots to scan when none are given on the command line.
     #[serde(default)]
     pub roots: Vec<PathBuf>,
+    /// Days of disuse after which a build artifact counts as stale.
+    #[serde(default)]
+    pub stale_days: Option<u64>,
 }
 
 impl Config {
@@ -102,20 +106,32 @@ fn env_roots() -> Option<Vec<PathBuf>> {
     (!roots.is_empty()).then_some(roots)
 }
 
-/// Resolve the fallback roots used when the command line names no path.
+/// The settings resolved once per run, before any subcommand dispatches.
+#[derive(Debug, Clone)]
+pub struct Settings {
+    /// Roots used when the command line names no path.
+    pub roots: Vec<PathBuf>,
+    /// Days of disuse after which a build artifact counts as stale.
+    pub stale_days: u64,
+}
+
+/// Resolve the settings used when the command line does not override them.
 ///
 /// `explicit_config` is the value of `--config` / `VACUUM_CONFIG` (which must
 /// exist when present); when `None`, the default location is consulted and a
 /// missing file is harmless.
 ///
+/// Roots follow `VACUUM_ROOTS` → config file → `$HOME`. `stale_days` follows
+/// the config file → [`DEFAULT_STALE_DAYS`]; the `--stale-days` flag overrides
+/// it later, at the point of use.
+///
+/// [`DEFAULT_STALE_DAYS`]: vacuum_core::cleaner::DEFAULT_STALE_DAYS
+///
 /// # Errors
 ///
 /// Returns a [`CliError`] when a config file exists but cannot be read or parsed,
 /// or when an explicitly named config file is absent.
-pub fn fallback_roots(explicit_config: Option<&Path>) -> CliResult<Vec<PathBuf>> {
-    if let Some(roots) = env_roots() {
-        return Ok(roots);
-    }
+pub fn settings(explicit_config: Option<&Path>) -> CliResult<Settings> {
     let config = match explicit_config {
         Some(path) => Config::read(path, true)?,
         None => match default_config_path() {
@@ -123,11 +139,21 @@ pub fn fallback_roots(explicit_config: Option<&Path>) -> CliResult<Vec<PathBuf>>
             None => Config::default(),
         },
     };
-    if config.roots.is_empty() {
-        Ok(safety::default_roots())
+
+    // The environment wins over the file for roots, and is checked first so a
+    // malformed file still fails loudly rather than being silently bypassed.
+    let roots = if let Some(roots) = env_roots() {
+        roots
+    } else if config.roots.is_empty() {
+        safety::default_roots()
     } else {
-        Ok(config.roots.iter().map(|path| expand_tilde(path)).collect())
-    }
+        config.roots.iter().map(|path| expand_tilde(path)).collect()
+    };
+
+    Ok(Settings {
+        roots,
+        stale_days: config.stale_days.unwrap_or(DEFAULT_STALE_DAYS),
+    })
 }
 
 #[cfg(test)]
@@ -149,6 +175,18 @@ mod tests {
     fn missing_roots_key_defaults_empty() {
         let config = Config::parse("", Path::new("config.toml")).unwrap();
         assert!(config.roots.is_empty());
+    }
+
+    #[test]
+    fn parses_stale_days() {
+        let config = Config::parse("stale_days = 14", Path::new("config.toml")).unwrap();
+        assert_eq!(config.stale_days, Some(14));
+    }
+
+    #[test]
+    fn missing_stale_days_is_none_so_the_default_applies() {
+        let config = Config::parse("roots = []", Path::new("config.toml")).unwrap();
+        assert_eq!(config.stale_days, None);
     }
 
     #[test]

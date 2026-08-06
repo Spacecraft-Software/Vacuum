@@ -33,4 +33,4 @@ pub use cleaner::{
 };
 pub use delete::{Action, DeleteMode, Deleter, Outcome};
 pub use error::{Result, VacuumError};
-pub use scan::{Usage, dir_size, find_pruned_dirs, largest_files, top_consumers};
+pub use scan::{Usage, dir_size, find_pruned_dirs, largest_files, sum_unique_files, top_consumers};

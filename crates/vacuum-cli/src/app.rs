@@ -12,12 +12,13 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use vacuum_cleaners::cleaners_for;
 use vacuum_core::{
-    Action, Candidate, DeleteMode, Deleter, Outcome, ScanContext, Usage, human_bytes, scan,
-    total_bytes,
+    Action, Candidate, Category, DeleteMode, Deleter, Outcome, ScanContext, Usage, human_bytes,
+    scan, total_bytes,
 };
 
 use crate::agent::OutputMode;
 use crate::cli::{CleanArgs, EmptyTrashArgs, GlobalArgs, ScanArgs, SelectArgs};
+use crate::config::Settings;
 use crate::envelope;
 use crate::error::{CliError, CliResult};
 use crate::trashbin;
@@ -44,8 +45,8 @@ fn resolve_roots(explicit: &[PathBuf], fallback: &[PathBuf]) -> Vec<PathBuf> {
 /// # Errors
 ///
 /// Returns a [`CliError`] if the frontend fails to scan or to drive the terminal.
-pub fn run_tui(explicit: &[PathBuf], fallback: &[PathBuf]) -> CliResult<()> {
-    let roots = resolve_roots(explicit, fallback);
+pub fn run_tui(explicit: &[PathBuf], settings: &Settings) -> CliResult<()> {
+    let roots = resolve_roots(explicit, &settings.roots);
     vacuum_tui::run(roots).map_err(|err| CliError::tui(&err))
 }
 
@@ -109,10 +110,10 @@ pub fn run_scan(
     args: &ScanArgs,
     mode: OutputMode,
     global: &GlobalArgs,
-    fallback: &[PathBuf],
+    settings: &Settings,
     command_line: &str,
 ) -> CliResult<()> {
-    let roots = resolve_roots(&args.explicit_roots(), fallback);
+    let roots = resolve_roots(&args.explicit_roots(), &settings.roots);
     let mut report = ScanReport { roots: Vec::new() };
 
     for root in roots {
@@ -179,26 +180,82 @@ struct CategoryGroup {
     candidates: Vec<Candidate>,
 }
 
+/// What a scan produced: candidates grouped by category, plus the roots any
+/// resulting deletion must be allowed to touch.
+#[derive(Debug)]
+struct Gathered {
+    groups: Vec<CategoryGroup>,
+    /// The scan roots widened by the [`Cleaner::extra_roots`] of the cleaners
+    /// that actually ran — see [`run_clean`].
+    ///
+    /// [`Cleaner::extra_roots`]: vacuum_core::Cleaner::extra_roots
+    delete_roots: Vec<PathBuf>,
+}
+
 /// Gather candidates for the selected categories within the selected roots.
-fn gather(select: &SelectArgs, fallback: &[PathBuf]) -> CliResult<Vec<CategoryGroup>> {
+///
+/// Several cleaners may share a category (build artifacts, for instance, come
+/// from both the directory sweep and the Cargo unit prune), so their candidates are
+/// merged into one group per category rather than one per cleaner. Groups are
+/// emitted in `Category::ALL` order, independent of catalog order.
+fn gather(select: &SelectArgs, settings: &Settings) -> CliResult<Gathered> {
     let categories = select
         .selected_categories()
         .map_err(CliError::unknown_category)?;
+    let roots = resolve_roots(&select.roots, &settings.roots);
     let ctx = ScanContext {
-        roots: resolve_roots(&select.roots, fallback),
+        roots: roots.clone(),
+        // The flag wins over the config file, which wins over the default.
+        stale_days: select.stale_days.unwrap_or(settings.stale_days),
     };
 
-    let mut groups = Vec::new();
+    let mut by_category: Vec<(Category, Vec<Candidate>)> = Vec::new();
+    let mut delete_roots = roots;
     for cleaner in cleaners_for(&categories) {
+        // `--cleaner` narrows within a category. Several cleaners can share one,
+        // and their candidates may overlap on purpose (the whole-directory and
+        // per-unit Cargo candidates cover the same tree), so a caller that wants
+        // exactly one of them needs to say so.
+        if !select.cleaners.is_empty() && !select.cleaners.iter().any(|id| id == cleaner.id()) {
+            continue;
+        }
         let candidates = cleaner.scan(&ctx)?;
-        groups.push(CategoryGroup {
-            category: cleaner.category().slug(),
-            title: cleaner.category().title(),
+        for root in cleaner.extra_roots() {
+            if !delete_roots.contains(&root) {
+                delete_roots.push(root);
+            }
+        }
+
+        let category = cleaner.category();
+        if let Some((_, existing)) = by_category.iter_mut().find(|(seen, _)| *seen == category) {
+            existing.extend(candidates);
+        } else {
+            by_category.push((category, candidates));
+        }
+    }
+
+    // Report in canonical category order, not the order cleaners happen to run.
+    by_category.sort_by_key(|(category, _)| {
+        Category::ALL
+            .iter()
+            .position(|known| known == category)
+            .unwrap_or(usize::MAX)
+    });
+
+    let groups = by_category
+        .into_iter()
+        .map(|(category, candidates)| CategoryGroup {
+            category: category.slug(),
+            title: category.title(),
             total_bytes: total_bytes(&candidates),
             candidates,
-        });
-    }
-    Ok(groups)
+        })
+        .collect();
+
+    Ok(Gathered {
+        groups,
+        delete_roots,
+    })
 }
 
 /// Run `vacuum list`.
@@ -206,10 +263,10 @@ pub fn run_list(
     args: &SelectArgs,
     mode: OutputMode,
     global: &GlobalArgs,
-    fallback: &[PathBuf],
+    settings: &Settings,
     command_line: &str,
 ) -> CliResult<()> {
-    let groups = gather(args, fallback)?;
+    let groups = gather(args, settings)?.groups;
     let grand_total: u64 = groups.iter().map(|group| group.total_bytes).sum();
 
     match mode {
@@ -343,11 +400,12 @@ pub fn run_clean(
     args: &CleanArgs,
     mode: OutputMode,
     global: &GlobalArgs,
-    fallback: &[PathBuf],
+    settings: &Settings,
     command_line: &str,
 ) -> CliResult<()> {
-    let groups = gather(&args.select, fallback)?;
-    let candidates: Vec<Candidate> = groups
+    let gathered = gather(&args.select, settings)?;
+    let candidates: Vec<Candidate> = gathered
+        .groups
         .into_iter()
         .flat_map(|group| group.candidates)
         .collect();
@@ -381,11 +439,10 @@ pub fn run_clean(
         }
     }
 
-    let deleter = Deleter::new(
-        delete_mode,
-        dry_run,
-        resolve_roots(&args.select.roots, fallback),
-    );
+    // The delete allowlist is the scan roots plus whatever the selected cleaners
+    // declared they need (e.g. `/tmp` for the temp-file cleaner). The
+    // protected-prefix and symlink guards still apply to every path.
+    let deleter = Deleter::new(delete_mode, dry_run, gathered.delete_roots);
     // Show a live spinner only for real, interactive work (the CLI Standard §7).
     let show_progress = mode == OutputMode::Human && !global.quiet && !dry_run;
     let (outcomes, reclaimed) = execute_candidates(

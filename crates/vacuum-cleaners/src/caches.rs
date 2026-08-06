@@ -77,6 +77,7 @@ impl Caches {
             detail: Some("cache (regenerated on demand)".to_owned()),
             bytes,
             regenerable: true,
+            trash_ok: true,
             risk: Risk::Safe,
             target: Target::Path { path },
         });
@@ -98,9 +99,7 @@ mod tests {
         fs::create_dir_all(&cache).unwrap();
         fs::write(cache.join("blob"), vec![0_u8; 2048]).unwrap();
 
-        let ctx = ScanContext {
-            roots: vec![tmp.path().to_path_buf()],
-        };
+        let ctx = ScanContext::new(vec![tmp.path().to_path_buf()]);
         let found = Caches.scan(&ctx).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].bytes, 2048);
