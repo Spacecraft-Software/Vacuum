@@ -8,7 +8,7 @@
 #   nix build                          # via flake.nix, builds this checkout
 #   nix-build packaging/default.nix    # release build from the tagged tarball
 #
-# The flake passes `src = self`, which skips the fetchFromGitHub path entirely.
+# The flake passes `srcOverride = self`, skipping the fetchFromGitHub path.
 # That is what makes a from-checkout build work before a release is tagged.
 #
 # Dependencies are taken from the committed Cargo.lock rather than a vendor
@@ -20,7 +20,13 @@
 , texinfo
   # Override to build a working tree (the flake does). When null, the tagged
   # release tarball is fetched instead.
-, src ? null
+  #
+  # Deliberately not named `src`. callPackage fills any unbound argument from
+  # nixpkgs, and nixpkgs *has* a `src` attribute (a package since renamed to
+  # simple-revision-control), so a `src ? null` default is silently overridden
+  # and `callPackage ./packaging/default.nix { }` fails with a baffling error
+  # about that unrelated package. `version` has no such clash.
+, srcOverride ? null
 , version ? "0.1.0"
 }:
 
@@ -29,17 +35,17 @@ rustPlatform.buildRustPackage {
   inherit version;
 
   src =
-    if src != null then
-      src
+    if srcOverride != null then
+      srcOverride
     else
       fetchFromGitHub {
         owner = "Spacecraft-Software";
         repo = "Vacuum";
         rev = "v${version}";
-        # TODO(release): replace with the real hash before tagging v0.1.0.
-        # Until that tag exists this path cannot build; use the flake
-        # (`nix build`), which builds the checkout directly.
-        hash = lib.fakeHash;
+        # Hash of the unpacked tree at tag v0.1.0. Unlike the tarball hashes
+        # the other packagers need, this is independent of GitHub's archive
+        # compression, so it stays valid even if that changes.
+        hash = "sha256-ZS/oaqLIzBSTtJ/s5YnI3sHCqztNzpCwZ/Cyi/PLA40=";
       };
 
   # The lockfile is committed, so Nix can vendor from it directly. `outputHashes`

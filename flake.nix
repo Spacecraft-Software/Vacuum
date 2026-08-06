@@ -35,7 +35,7 @@
             package = lib.mkOption {
               type = lib.types.package;
               default = pkgs.callPackage ./packaging/default.nix {
-                src = self;
+                srcOverride = self;
                 version = "0.1.0-git";
               };
               defaultText = lib.literalMD "the `vacuum` package from this flake";
@@ -56,7 +56,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         vacuum = pkgs.callPackage ./packaging/default.nix {
-          src = self;
+          srcOverride = self;
           # Not a release: mark it so `vacuum --version` never claims to be the
           # tagged 0.1.0 when it is really whatever is checked out.
           version = "0.1.0-git";
