@@ -31,6 +31,26 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  nix:
+    name: nix flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      # Builds packages.default (which runs the test suite in its check phase)
+      # and evaluates every devShell. This is also the gate on the flake staying
+      # in step with packaging/default.nix, since both come from one definition.
+      - name: Flake check
+        run: nix flake check --print-build-logs
+
+      - name: Smoke-test the built binary
+        run: |
+          nix build --print-build-logs
+          ./result/bin/vacuum --version
+          ./result/bin/vacuum list --json --category temp-files > /dev/null
+
   reuse:
     name: REUSE compliance
     runs-on: ubuntu-latest

@@ -13,6 +13,13 @@
 doc/*.info
 doc/*.html
 
+# Nix build symlinks (`nix build` writes ./result)
+/result
+/result-*
+
+# direnv's per-directory cache; .envrc itself is tracked
+/.direnv
+
 # Editor / OS noise
 .DS_Store
 *.swp

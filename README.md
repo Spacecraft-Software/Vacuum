@@ -91,11 +91,80 @@ vacuum list --json           # machine-readable output for scripts/agents
 
 ## Install
 
-Requires Rust (edition 2024, MSRV 1.85+). From a clone:
+> Do **not** run `cargo install vacuum`. An unrelated crates.io crate holds that
+> name (a spaceflight CLI). Install from this repository, as below.
+
+### Nix and NixOS
+
+The flake needs no Rust toolchain on the host — it supplies one.
 
 ```sh
-cargo install --path crates/vacuum-cli
+nix run github:Spacecraft-Software/Vacuum          # run it once, install nothing
+nix profile install github:Spacecraft-Software/Vacuum   # install for this user
+nix build github:Spacecraft-Software/Vacuum        # build only; ./result/bin/vacuum
 ```
+
+To install it system-wide, add the flake as an input and enable the module:
+
+```nix
+{
+  inputs.vacuum.url = "github:Spacecraft-Software/Vacuum";
+
+  # in your NixOS configuration:
+  # imports = [ inputs.vacuum.nixosModules.default ];
+  # programs.vacuum.enable = true;
+}
+```
+
+Or drop the package straight into `environment.systemPackages`:
+
+```nix
+environment.systemPackages = [ inputs.vacuum.packages.${pkgs.system}.default ];
+```
+
+For hacking on Vacuum itself, `nix develop` gives you rustc, cargo, clippy,
+rustfmt, rust-analyzer, mold, reuse, and texinfo. `nix flake check` builds the
+package and runs the test suite.
+
+### GNU Guix System
+
+`manifest.scm` supplies the toolchain; nothing is installed on the host until you
+ask for it:
+
+```sh
+git clone https://github.com/Spacecraft-Software/Vacuum
+cd Vacuum
+guix shell -m manifest.scm -- cargo install --path crates/vacuum-cli
+```
+
+That puts `vacuum` in `~/.cargo/bin`. To work on the source instead:
+
+```sh
+guix shell -m manifest.scm            # toolchain only, host untouched
+guix shell --pure -m manifest.scm     # ignore the ambient environment
+```
+
+A package definition lives in `packaging/guix.scm`, but it is **not buildable
+yet**: `cargo-build-system` resolves dependencies through `#:cargo-inputs` rather
+than from `Cargo.lock`, and this workspace has 191 locked crates. That list is
+generated with `guix import crate -r vacuum` at release time. Until then, use the
+`guix shell` route above.
+
+### Arch Linux
+
+```sh
+cd packaging && makepkg -si
+```
+
+### From source
+
+Requires Rust (edition 2024, MSRV 1.85+):
+
+```sh
+cargo install --path crates/vacuum-cli --force
+```
+
+`--force` replaces any previous install of the `vacuum` binary.
 
 ## Project Posture
 
