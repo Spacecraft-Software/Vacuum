@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Configuration for `cargo audit` (Standard section 3.3).
+#
+# Entries here are ACCEPTED findings, not silenced ones: each carries the
+# reasoning that justified accepting it and the condition that would retire it.
+# Anything not listed is a genuine failure and must be fixed, not appended.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0002 — lru 0.12.5, reached only through ratatui 0.29.
+    #
+    # Severity INFO / unsound, not a vulnerability: `IterMut::next` and
+    # `next_back` briefly take an exclusive reference to the key, violating
+    # Stacked Borrows. There is no attacker-facing vector, and Vacuum is a
+    # local tool with no network surface (section 9, privacy-first).
+    #
+    # NOT REACHABLE FROM HERE. ratatui uses lru for exactly one thing, its
+    # layout memoisation cache — `LruCache<(Rect, Layout), (Segments, Spacers)>`
+    # in src/layout/layout.rs — and never calls `iter_mut` on it. Verified
+    # against the ratatui 0.29.0 sources, not assumed.
+    #
+    # NOT FIXABLE IN PLACE. ratatui 0.29 requires `lru = "0.12.0"`; the fix
+    # landed in lru 0.16.3, so no `cargo update` reaches it within semver. The
+    # only route is ratatui 0.30.x, which splits the crate into
+    # ratatui-core / -widgets / -crossterm and is a breaking port of
+    # vacuum-tui and vacuum-theme. Doing that hurriedly would trade a
+    # provably unreachable unsoundness for real instability, which Priority 1
+    # does not permit.
+    #
+    # RETIRE THIS ENTRY when Vacuum moves to ratatui 0.30. That release makes
+    # `layout-cache` an optional feature, so the migration can drop lru from
+    # the dependency tree outright rather than merely bumping it.
+    "RUSTSEC-2026-0002",
+]
