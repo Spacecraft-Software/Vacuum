@@ -23,3 +23,7 @@ doc/*.html
 # Editor / OS noise
 .DS_Store
 *.swp
+
+# Engram session archives (`engram save-chat`). Regenerable from the memory
+# store, one file per save, and large enough to bury real history in the diff.
+chat/
