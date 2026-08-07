@@ -14,8 +14,14 @@ use serde::Serialize;
 use crate::error::Result;
 
 /// The reclaimable-space categories Vacuum knows about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+///
+/// Serializes as its [`Category::slug`], which is also what `--category`
+/// accepts, so one spelling identifies a category everywhere: on the command
+/// line, in a candidate record, in a group heading, and in the introspection
+/// schema. `Serialize` is written out rather than derived precisely to
+/// guarantee that — a `rename_all` derive silently produced a *second*
+/// spelling for the one variant whose name does not kebab-case to its slug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     /// Regenerable developer build artifacts (`target/`, `node_modules`, …).
     BuildArtifacts,
@@ -62,10 +68,22 @@ impl Category {
     }
 
     /// Parse a category from its CLI slug.
+    ///
+    /// The exact inverse of [`Category::slug`], and therefore of the serialized
+    /// form: a slug read back out of JSON round-trips through this.
     pub fn from_slug(slug: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
             .find(|category| category.slug() == slug)
+    }
+}
+
+impl Serialize for Category {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.slug())
     }
 }
 
@@ -230,4 +248,65 @@ pub trait Cleaner {
 /// Sum the estimated reclaimable bytes across a set of candidates.
 pub fn total_bytes(candidates: &[Candidate]) -> u64 {
     candidates.iter().map(|candidate| candidate.bytes).sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Candidate, Category, Risk, Target};
+
+    /// The serialized form and the CLI slug must be the same string.
+    ///
+    /// They were not: a `#[serde(rename_all = "kebab-case")]` derive spelled
+    /// `PackageManagerGc` as `package-manager-gc`, while `slug` — and therefore
+    /// `--category` and every group heading — said `package-gc`. A consumer
+    /// reading a candidate's category could not feed it back to the CLI. This
+    /// asserts over `ALL`, so adding a variant whose name does not kebab-case
+    /// to its slug fails here rather than in someone's pipeline.
+    #[test]
+    fn serialized_category_is_the_cli_slug() {
+        for category in Category::ALL {
+            let json = serde_json::to_string(&category).unwrap();
+            assert_eq!(
+                json,
+                format!("\"{}\"", category.slug()),
+                "{category:?} serializes differently from its slug"
+            );
+        }
+    }
+
+    #[test]
+    fn every_serialized_category_parses_back() {
+        for category in Category::ALL {
+            let json = serde_json::to_string(&category).unwrap();
+            let slug: String = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                Category::from_slug(&slug),
+                Some(category),
+                "{category:?} did not round-trip through its serialized form"
+            );
+        }
+    }
+
+    #[test]
+    fn a_candidate_reports_the_same_category_string_as_its_group() {
+        // The regression that prompted this: `vacuum list --json` labelled the
+        // group `package-gc` and every candidate inside it `package-manager-gc`.
+        let candidate = Candidate {
+            cleaner_id: "package-gc".to_owned(),
+            category: Category::PackageManagerGc,
+            label: "nix-collect-garbage -d".to_owned(),
+            detail: None,
+            bytes: 0,
+            regenerable: true,
+            trash_ok: true,
+            risk: Risk::Caution,
+            target: Target::Path {
+                path: std::path::PathBuf::from("/tmp/x"),
+            },
+        };
+
+        let value = serde_json::to_value(&candidate).unwrap();
+        assert_eq!(value["category"], "package-gc");
+        assert_eq!(value["category"], Category::PackageManagerGc.slug());
+    }
 }
