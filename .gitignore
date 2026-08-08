@@ -4,7 +4,6 @@
 
 # Local working documents (kept out of the repo per maintainer request)
 /PLAN.md
-/CLAUDE.md
 
 # Document derivatives (canonical sources only, per spacecraft-document-format)
 *.docx
