@@ -3,29 +3,49 @@
 
 # AGENTS.md — Vacuum
 
-Tool-agnostic conventions for AI agents working in this repository. (Claude Code: see also
-`CLAUDE.md`, which is gitignored.)
+Authoritative agent context (Standard §5.7). `CLAUDE.md` imports this file and
+adds only Claude-Code-only notes.
 
 ## Project identity
-- **Name:** Vacuum — disk-space recovery TUI/CLI
-- **Org:** Spacecraft Software · **License:** `GPL-3.0-or-later`
-- **Standard:** The Steelbore Standard v1.25
+**Vacuum** is a Rust TUI/CLI disk-space recovery tool under the Spacecraft Software
+umbrella. It scans disk usage in parallel, categorizes reclaimable space
+(regenerable build artifacts, package-manager garbage, app caches, large files),
+and deletes selected items safely — XDG trash by default, `--purge` for permanent
+removal.
+
+- **Org:** Spacecraft Software · **Repo:** `github.com/Spacecraft-Software/Vacuum`
+- **License:** software is `GPL-3.0-or-later` (local tool, not network-facing);
+  the Texinfo manual (`doc/*.texi`) is `CC-BY-SA-4.0` — see Coding conventions.
+- **Standard:** The Steelbore Standard
 - **Maintainer:** Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
 - **URL:** https://Vacuum.SpacecraftSoftware.org/
 
 ## Layout
-- `crates/vacuum-core` — scan engine, `Cleaner` trait, `Deleter`, safety guards.
+- `crates/vacuum-core` — scan engine, `Cleaner` trait, `Deleter`, safety guards (`#![forbid(unsafe_code)]`).
 - `crates/vacuum-cleaners` — the four cleaner catalogs.
-- `crates/vacuum-theme` — `steelbore` theme tokens.
-- `crates/vacuum-cli` — binary `vacuum`.
+- `crates/vacuum-theme` — `steelbore` theme tokens (§11.1).
+- `crates/vacuum-cli` — binary `vacuum`: scan/list/clean + JSON envelope.
 - `crates/vacuum-tui` — ratatui frontend.
 
 ## Coding conventions
 - Edition 2024, MSRV 1.85; `#![forbid(unsafe_code)]` everywhere.
-- REUSE two-tag SPDX header on every `.rs` file and manifest.
+- REUSE two-tag SPDX header (§4.3) on every `.rs` file and manifest:
+  ```
+  // SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+  // SPDX-License-Identifier: GPL-3.0-or-later
+  ```
+- **Manual licensing (decided 2026-06-21, keep as-is):** the Texinfo manual is
+  document-class → `CC-BY-SA-4.0` per Standard §4.1.1, *not* GPL. `doc/*.texi`
+  carries the CC-BY-SA-4.0 SPDX tag and a matching `@copying` grant; `REUSE.toml`
+  has a scoped `doc/*.texi` override so the repo-wide `**` GPL rule does not
+  reclaim it, while software-class build assets under `doc/` (e.g.
+  `spacecraft.css`) stay `GPL-3.0-or-later`. Do not "unify" the manual back to GPL.
 - `thiserror` in libs, `anyhow` in the binary; no `unwrap`/`expect` on fallible input.
-- `jiff` UTC `Z` for all timestamps.
-- Concurrency designed-in (parallel `jwalk` scan).
+- `jiff`, UTC `Z` only, for all timestamps (§14).
+- Concurrency designed-in: parallel scan via `jwalk` (§3.2).
+- Colors only via the `steelbore` theme; Void Navy `#000027` background
+  (§11/§11.1). No bare hex.
+- Keybindings: CUA + vim `hjkl` (§10). PFA: zero telemetry (§9).
 
 ## CLI conformance (the CLI Standard)
 - Commands: `scan`, `list`, `clean`, `empty-trash`, `schema`, `describe`, `tui`. Run
@@ -84,5 +104,17 @@ spaceflight CLI); re-installing from this repo keeps `vacuum` pointed at the dis
 Prefer this over running `./target/release/vacuum` so daily use matches a real install.
 
 ## Pre-commit gate
-`cargo fmt --check` · `cargo clippy --workspace --all-targets -- -D warnings` · `cargo test
---workspace` · `reuse lint`. All commits signed and "Verified" (§6.3).
+```
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+reuse lint
+```
+
+All commits signed and "Verified" (§6.3).
+
+## Don't
+- Don't `git init` or create the GitHub repo without explicit maintainer authorization.
+- Don't add network access or telemetry (§9 PFA).
+- Don't use `apt`/`dnf`/`pacman` — Guix/Nix/Cargo/Flatpak only.
+- Don't bypass commit signing (§6.3) or the pre-commit gate.
