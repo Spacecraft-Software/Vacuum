@@ -16,7 +16,10 @@ use vacuum_core::{
     scan, total_bytes,
 };
 
-use crate::agent::OutputMode;
+use vacuum_tui::{ProtocolOverrides, protocols};
+
+use crate::a11y;
+use crate::agent::{self, OutputMode};
 use crate::cli::{CleanArgs, EmptyTrashArgs, GlobalArgs, ScanArgs, SelectArgs};
 use crate::config::Settings;
 use crate::envelope;
@@ -45,9 +48,48 @@ fn resolve_roots(explicit: &[PathBuf], fallback: &[PathBuf]) -> Vec<PathBuf> {
 /// # Errors
 ///
 /// Returns a [`CliError`] if the frontend fails to scan or to drive the terminal.
-pub fn run_tui(explicit: &[PathBuf], settings: &Settings) -> CliResult<()> {
+pub fn run_tui(explicit: &[PathBuf], settings: &Settings, global: &GlobalArgs) -> CliResult<()> {
     let roots = resolve_roots(explicit, &settings.roots);
-    vacuum_tui::run(roots).map_err(|err| CliError::tui(&err))
+    let accessibility = a11y::resolve_for(global, settings.accessible);
+    let options = vacuum_tui::TuiOptions {
+        accessible: accessibility.enabled,
+        agent: agent::is_agent(),
+        protocols: term_protocols(global)?,
+        ..vacuum_tui::TuiOptions::default()
+    };
+    let report = vacuum_tui::run(roots, &options).map_err(|err| CliError::tui(&err))?;
+    // Printed after the TUI has left the alternate screen, so it stays visible.
+    if global.verbose && !global.quiet {
+        eprintln!("[INFO] accessible mode: {accessibility}");
+        eprintln!("[INFO] terminal protocols: {report}");
+    }
+    Ok(())
+}
+
+/// The terminal-protocol overrides: `--term-protocols` layered over
+/// `SPACECRAFT_TERM_PROTOCOLS`, the flag winning name by name.
+fn term_protocols(global: &GlobalArgs) -> CliResult<ProtocolOverrides> {
+    let env = match std::env::var(protocols::OVERRIDE_ENV) {
+        Ok(list) => ProtocolOverrides::parse(&list).map_err(|err| {
+            CliError::usage(
+                "INVALID_TERM_PROTOCOLS",
+                format!("{}: {err}", protocols::OVERRIDE_ENV),
+                format!("env -u {} vacuum tui", protocols::OVERRIDE_ENV),
+            )
+        })?,
+        Err(_) => ProtocolOverrides::default(),
+    };
+    let flag = match global.term_protocols.as_deref() {
+        Some(list) => ProtocolOverrides::parse(list).map_err(|err| {
+            CliError::usage(
+                "INVALID_TERM_PROTOCOLS",
+                format!("--term-protocols: {err}"),
+                "vacuum tui --term-protocols=-all",
+            )
+        })?,
+        None => ProtocolOverrides::default(),
+    };
+    Ok(flag.over(env))
 }
 
 /// Whether an outcome's bytes count toward reclaimed space.

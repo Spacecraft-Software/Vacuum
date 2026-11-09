@@ -7,8 +7,9 @@
 //! checkbox list of reclaimable candidates grouped by category, with a running
 //! selection total, dry-run-by-intent confirmation, and the Steelbore theme.
 //!
-//! Keys: `↑/↓` or `j/k` move · `space` toggle · `a` toggle all · `r` choose
-//! roots · `p` purge mode · `enter` apply (with confirm) · `q`/`Esc` quit.
+//! Keys: `↑/↓` or `j/k` move · `space` toggle · `a` toggle all · `y` copy path
+//! · `r` choose roots · `p` purge mode · `enter` apply (with confirm) ·
+//! `q`/`Esc` quit.
 //!
 //! Scanning and deleting run on a background thread and show a live progress
 //! overlay (an animated spinner plus, for deletion, a determinate bar). While a
@@ -21,9 +22,18 @@
 //! same roots bound every deletion via [`vacuum_core::safety`], so the picker
 //! cannot widen the deletion boundary past what the CLI would allow.
 //!
+//! Modern terminal protocols (kitty keyboard, OSC 52 copy, OSC 9;4 progress)
+//! light up where the terminal supports them and stay silent elsewhere; see
+//! [`protocols`]. In accessible mode (Standard §18) the spinner is replaced by
+//! a static line with a text percentage.
+//!
 //! Rust guideline compliant 2026-05-18
 
 #![forbid(unsafe_code)]
+
+mod probe;
+pub mod protocols;
+mod session;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,9 +49,13 @@ use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, 
 use ratatui::{DefaultTerminal, Frame};
 use vacuum_cleaners::all_cleaners;
 use vacuum_core::{
-    Action, Candidate, Category, DeleteMode, Deleter, ScanContext, human_bytes, total_bytes,
+    Action, Candidate, Category, DeleteMode, Deleter, ScanContext, Target, human_bytes, total_bytes,
 };
 use vacuum_theme::Steelbore;
+
+use crate::protocols::ProgressState;
+pub use crate::protocols::{Protocol, ProtocolOverrides, ProtocolReport};
+use crate::session::TermSession;
 
 /// How long to wait for input before redrawing while idle.
 const TICK: Duration = Duration::from_millis(250);
@@ -56,20 +70,58 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 /// The idle status line shown once a scan completes.
 const READY: &str = "Select items to reclaim, then press enter. Press r to choose roots.";
 
+/// How long the startup probe waits for the terminal's DA1 fence before
+/// treating every unanswered feature as unsupported. Local terminals answer
+/// in a few milliseconds; 200 ms leaves room for SSH.
+pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// How the TUI should present itself; resolved once by the caller.
+#[derive(Debug, Clone)]
+pub struct TuiOptions {
+    /// Standard §18 accessible mode: no animation, progress also as text.
+    pub accessible: bool,
+    /// An AI agent or CI is driving the process: emit no protocol sequences.
+    pub agent: bool,
+    /// The user's `--term-protocols` / `SPACECRAFT_TERM_PROTOCOLS` overrides.
+    pub protocols: ProtocolOverrides,
+    /// Deadline for the startup capability probe.
+    pub probe_timeout: Duration,
+}
+
+impl Default for TuiOptions {
+    fn default() -> Self {
+        Self {
+            accessible: false,
+            agent: false,
+            protocols: ProtocolOverrides::default(),
+            probe_timeout: DEFAULT_PROBE_TIMEOUT,
+        }
+    }
+}
+
 /// Launch the interactive TUI over `roots`, restoring the terminal on exit.
 ///
 /// `roots` bounds both the scan and every deletion performed from the frontend.
+/// Returns the terminal protocols that were in force, for `--verbose`.
 ///
 /// # Errors
 ///
 /// Returns an error if terminal I/O fails. Scan failures are non-fatal and are
 /// surfaced in the UI rather than aborting.
-pub fn run(roots: Vec<PathBuf>) -> anyhow::Result<()> {
-    let mut app = App::new(roots);
+pub fn run(roots: Vec<PathBuf>, options: &TuiOptions) -> anyhow::Result<ProtocolReport> {
     let mut terminal = ratatui::init();
+    // After `init` (raw mode on, so the probe's replies are not echoed) and
+    // before the first `event::poll`, so crossterm never sees the replies.
+    let term = TermSession::start(options);
+    let report = term.report().clone();
+    let mut app = App::new(roots, term, options.accessible);
     let result = app.event_loop(&mut terminal);
+    // Protocol modes first (the keyboard stack lives on the alternate screen),
+    // then ratatui leaves the alternate screen and raw mode.
+    app.term.restore();
+    drop(app);
     ratatui::restore();
-    result
+    result.map(|()| report)
 }
 
 /// A rendered row: a category header or a selectable candidate.
@@ -140,8 +192,12 @@ enum JobKind {
 
 /// A message streamed from a background worker to the UI thread.
 enum Progress {
-    /// Scanning moved on to this category (indeterminate phase label).
-    Scanning(String),
+    /// Scanning moved on to a category: cleaner `index` of `total`.
+    Scanning {
+        label: String,
+        index: usize,
+        total: usize,
+    },
     /// Scan finished; install these results.
     Scanned {
         candidates: Vec<Candidate>,
@@ -177,7 +233,8 @@ struct Job {
     frame: usize,
     /// Current phase label (category being scanned, or item being deleted).
     phase: String,
-    /// Delete progress: items removed of the total selected.
+    /// Items finished of the total: cleaners for a scan, selected items for a
+    /// delete.
     done: usize,
     total: usize,
     /// Delete progress: bytes reclaimed so far, and the selected total.
@@ -207,10 +264,14 @@ struct App {
     picker: Option<Picker>,
     job: Option<Job>,
     status: String,
+    /// Terminal protocols in force (clipboard, progress, restore).
+    term: TermSession,
+    /// Standard §18 accessible mode: static progress text, no spinner.
+    accessible: bool,
 }
 
 impl App {
-    fn new(roots: Vec<PathBuf>) -> Self {
+    fn new(roots: Vec<PathBuf>, term: TermSession, accessible: bool) -> Self {
         let mut app = Self {
             delete_roots: roots.clone(),
             roots,
@@ -223,6 +284,8 @@ impl App {
             picker: None,
             job: None,
             status: "Scanning…".to_owned(),
+            term,
+            accessible,
         };
         app.start_scan(Some(READY.to_owned()));
         app
@@ -230,9 +293,16 @@ impl App {
 
     fn event_loop(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         loop {
+            if self.term.should_exit() {
+                return Ok(());
+            }
             self.pump_job();
+            let progress = self.job.as_ref().map(Job::progress_state);
+            self.term.progress(progress);
             terminal.draw(|frame| self.draw(frame))?;
-            let timeout = if self.job.is_some() {
+            // The fast tick only animates the spinner, which accessible mode
+            // does not draw.
+            let timeout = if self.job.is_some() && !self.accessible {
                 ACTIVE_TICK
             } else {
                 TICK
@@ -269,7 +339,15 @@ impl App {
         if let Some(job) = self.job.as_mut() {
             loop {
                 match job.rx.try_recv() {
-                    Ok(Progress::Scanning(label)) => job.phase = label,
+                    Ok(Progress::Scanning {
+                        label,
+                        index,
+                        total,
+                    }) => {
+                        job.phase = label;
+                        job.done = index;
+                        job.total = total;
+                    }
                     Ok(Progress::Deleting {
                         label,
                         done,
@@ -450,6 +528,12 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => self.cursor_up(),
             KeyCode::Char(' ') => self.toggle_current(),
             KeyCode::Char('a') => self.toggle_all(),
+            KeyCode::Char('y') => {
+                if let Some(Row::Item { index }) = self.rows.get(self.cursor) {
+                    let text = copy_text(&self.candidates[*index]);
+                    self.copy(&text);
+                }
+            }
             KeyCode::Char('r') => self.open_picker(),
             KeyCode::Char('p') => {
                 self.purge = !self.purge;
@@ -469,6 +553,16 @@ impl App {
             _ => {}
         }
         false
+    }
+
+    /// Copy `text` with OSC 52 and say so. The text is always shown too: a
+    /// terminal without OSC 52 ignores the sequence silently, so the user can
+    /// still copy it by hand.
+    fn copy(&mut self, text: &str) {
+        self.status = match self.term.copy(text) {
+            Ok(()) => format!("[OK] Copied ({} chars): {text}", text.chars().count()),
+            Err(reason) => format!("[INFO] Not copied ({reason}): {text}"),
+        };
     }
 
     /// Open the directory picker, starting at the current working directory.
@@ -497,6 +591,21 @@ impl App {
             KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace => self.picker_ascend(),
             KeyCode::Char(' ') => self.picker_toggle_root(),
             KeyCode::Char('d' | 'x') => self.picker_remove_root(),
+            KeyCode::Char('y') => {
+                if let Some(Entry::Parent(path) | Entry::Dir(path)) =
+                    self.picker.as_ref().and_then(Picker::current)
+                {
+                    match path.to_str() {
+                        Some(text) => {
+                            let text = text.to_owned();
+                            self.copy(&text);
+                        }
+                        None => {
+                            self.status = "[WARN] Path is not valid UTF-8; not copied.".to_owned()
+                        }
+                    }
+                }
+            }
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.picker = None;
                 self.start_scan(Some(READY.to_owned()));
@@ -635,7 +744,7 @@ impl App {
 
         // A running job takes the screen; the picker cannot be open during one.
         if let Some(job) = self.job.as_ref() {
-            Self::draw_progress(frame, job, base);
+            Self::draw_progress(frame, job, base, self.accessible);
         } else if let Some(picker) = self.picker.as_ref() {
             self.draw_picker(frame, picker, base);
         }
@@ -681,7 +790,7 @@ impl App {
             human_bytes(self.selected_bytes())
         ));
         let keys = Line::from(
-            "↑/↓ move · space toggle · a all · r roots · p purge · enter apply · q quit",
+            "↑/↓ move · space toggle · a all · y copy · r roots · p purge · enter apply · q quit",
         )
         .style(base.fg(Steelbore::ACCENT));
         let status = if self.confirming {
@@ -703,7 +812,7 @@ impl App {
     }
 
     /// Render the progress overlay for the active background job.
-    fn draw_progress(frame: &mut Frame, job: &Job, base: Style) {
+    fn draw_progress(frame: &mut Frame, job: &Job, base: Style, accessible: bool) {
         // 60% wide, 30% tall: a compact band centered over the list.
         let area = centered_rect(60, 30, frame.area());
         frame.render_widget(Clear, area);
@@ -727,10 +836,20 @@ impl App {
         ])
         .split(inner);
 
-        let spinner = SPINNER[job.frame % SPINNER.len()];
-        let phase =
-            Paragraph::new(format!("{spinner}  {}", job.phase)).style(base.fg(Steelbore::INFO));
-        frame.render_widget(phase, chunks[0]);
+        // Accessible mode: no spinner (screen readers pronounce the glyphs);
+        // a static line with a monotonic percentage instead.
+        let phase = if accessible {
+            match job.progress_state() {
+                ProgressState::Normal(percent) => format!("Working… {percent}%  {}", job.phase),
+                ProgressState::Indeterminate => format!("Working…  {}", job.phase),
+            }
+        } else {
+            format!("{}  {}", SPINNER[job.frame % SPINNER.len()], job.phase)
+        };
+        frame.render_widget(
+            Paragraph::new(phase).style(base.fg(Steelbore::INFO)),
+            chunks[0],
+        );
 
         match job.kind {
             JobKind::Delete => {
@@ -839,6 +958,50 @@ impl App {
     }
 }
 
+impl Job {
+    /// The job's progress as a whole percentage, or indeterminate before the
+    /// worker has reported a total.
+    fn progress_state(&self) -> ProgressState {
+        match self.kind {
+            JobKind::Delete if self.total > 0 || self.total_bytes > 0 => {
+                ProgressState::Normal(percent(progress_ratio(
+                    self.done,
+                    self.total,
+                    self.reclaimed,
+                    self.total_bytes,
+                )))
+            }
+            JobKind::Scan if self.total > 0 => {
+                ProgressState::Normal(percent(progress_ratio(self.done, self.total, 0, 0)))
+            }
+            _ => ProgressState::Indeterminate,
+        }
+    }
+}
+
+/// A 0.0–1.0 ratio as a whole percentage, rounded down so it never claims
+/// 100% before the work is done.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the ratio is clamped to 0.0–1.0, so the product fits in 0–100"
+)]
+fn percent(ratio: f64) -> u8 {
+    (ratio.clamp(0.0, 1.0) * 100.0).floor() as u8
+}
+
+/// The text `y` copies for a candidate: the path it would remove, the root of
+/// a batch, or its label for a command.
+fn copy_text(candidate: &Candidate) -> String {
+    let path = match &candidate.target {
+        Target::Path { path } => Some(path),
+        Target::Batch { root, .. } => Some(root),
+        Target::Command { .. } => None,
+    };
+    path.and_then(|path| path.to_str())
+        .map_or_else(|| candidate.label.clone(), str::to_owned)
+}
+
 /// The index of the first selectable item row, or 0 when there is none.
 fn first_item_row(rows: &[Row]) -> usize {
     rows.iter()
@@ -942,11 +1105,17 @@ fn spawn_scan(roots: Vec<PathBuf>, cancel: Arc<AtomicBool>) -> Receiver<Progress
         // cleaner.
         let mut found: Vec<(Category, Vec<Candidate>)> = Vec::new();
 
-        for cleaner in all_cleaners() {
+        let cleaners = all_cleaners();
+        let total = cleaners.len();
+        for (index, cleaner) in cleaners.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
-            let _ = tx.send(Progress::Scanning(cleaner.category().title().to_owned()));
+            let _ = tx.send(Progress::Scanning {
+                label: cleaner.category().title().to_owned(),
+                index,
+                total,
+            });
             match cleaner.scan(&ctx) {
                 Ok(items) => {
                     for root in cleaner.extra_roots() {
@@ -1056,7 +1225,7 @@ fn spawn_delete(
 
 #[cfg(test)]
 mod tests {
-    use super::{progress_ratio, read_subdirs, toggle_root};
+    use super::{percent, progress_ratio, read_subdirs, toggle_root};
     use std::fs;
     use std::path::PathBuf;
 
@@ -1105,5 +1274,14 @@ mod tests {
         assert!(progress_ratio(0, 0, 0, 0).abs() < 1e-9);
         // Over-100% is clamped.
         assert!((progress_ratio(5, 4, 150, 100) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn percent_rounds_down_and_clamps() {
+        assert_eq!(percent(0.0), 0);
+        assert_eq!(percent(0.999), 99);
+        assert_eq!(percent(1.0), 100);
+        assert_eq!(percent(7.0), 100);
+        assert_eq!(percent(-1.0), 0);
     }
 }

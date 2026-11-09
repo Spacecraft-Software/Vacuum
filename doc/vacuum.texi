@@ -290,6 +290,17 @@ Suppress non-error standard-error output, such as per-item skip warnings.
 @item --config @var{path}
 Read default scan roots from this TOML config file (environment variable
 @env{VACUUM_CONFIG}). @xref{Configuration}.
+
+@item --accessible
+@itemx --no-accessible
+Turn accessible mode on or off for the interactive frontend, overriding
+@env{SPACECRAFT_A11Y}, the configuration file and the automatic hints.
+@xref{Accessible mode}.
+
+@item --term-protocols @var{list}
+Force terminal protocols on or off for the interactive frontend, for example
+@samp{--term-protocols=-all} or @samp{--term-protocols=-keyboard,+progress}.
+@xref{Terminal protocols}.
 @end table
 
 Timestamps in JSON output are always ISO@tie{}8601 UTC with a mandatory @code{Z}
@@ -308,6 +319,10 @@ home directory.
 roots = ["~/projects", "~/Downloads", "/data/scratch"]
 stale_days = 30
 @end example
+
+An @code{[accessibility]} table with @code{enabled = true} turns accessible
+mode on; @code{enabled = false} keeps it off even when a hint would turn it on
+(@pxref{Accessible mode}).
 
 The @code{stale_days} key sets how long a build artifact must go untouched
 before it counts as stale, and defaults to 30. It is overridden by
@@ -362,6 +377,11 @@ Move the cursor.
 Toggle the highlighted candidate.
 @item a
 Toggle all candidates.
+@item y
+Copy the highlighted candidate's path (the root of a batch, or the label of a
+command) to the clipboard. In the directory picker, copy the highlighted
+directory. The copied text is always shown in the status line as well, so you
+can copy it by hand in a terminal without OSC@tie{}52.
 @item r
 Open the directory picker to choose scan roots (see below).
 @item p
@@ -404,6 +424,85 @@ determinate bar with the item count and bytes reclaimed of the selected total.
 While a job runs, @key{ESC} (or @kbd{q}) cancels a deletion after the current
 item completes, or quits during a scan (scanning is read-only, so its worker is
 safely abandoned). A finished deletion re-scans automatically.
+
+@node Terminal protocols
+@section Terminal protocols
+
+The frontend uses three modern terminal protocols where the terminal supports
+them, and sends nothing where it does not:
+
+@table @asis
+@item kitty keyboard protocol
+Unambiguous key reporting, so @key{ESC} is recognized at once rather than
+after a timeout. Vacuum asks the terminal at startup and uses it only when the
+terminal answers. In WezTerm it is off by default; set
+@code{config.enable_kitty_keyboard = true} in @file{wezterm.lua}.
+
+@item OSC@tie{}52 clipboard
+How @kbd{y} copies. It works over SSH and through tmux (with
+@samp{set -g set-clipboard on}). No terminal says whether it accepted a copy,
+so the copied text is always shown too.
+
+@item OSC@tie{}9;4 progress
+Scan and delete progress in the terminal's tab, title bar or taskbar. Some
+terminals show @samp{OSC 9} as a desktop notification instead, so Vacuum sends
+it only to terminals known to show progress: Windows Terminal, ConEmu,
+Ghostty, VS Code, Rio, contour, foot, WezTerm builds from 2025-02-10 on,
+iTerm2@tie{}3.6 or later and kitty@tie{}0.47 or later. Inside tmux, zellij or
+GNU screen it is skipped.
+@end table
+
+Vacuum shows no images and has no mouse regions, so it does not use the kitty
+graphics protocol, animation, rich clipboard or pointer shapes.
+
+Detection runs once at startup: Vacuum writes its queries followed by a DA1
+query, which every terminal answers, and gives up after 200@tie{}ms. Nothing is
+sent and nothing is probed when standard output is not a terminal, under an AI
+agent or CI (@pxref{Agent Integration}), or when @env{TERM} is @code{dumb} or
+unset. On exit, on @code{SIGTERM}, @code{SIGHUP} or @code{SIGINT}, and on a
+crash, Vacuum restores the keyboard mode and clears the progress indicator
+before leaving the alternate screen.
+
+To override detection, pass @option{--term-protocols} or set
+@env{SPACECRAFT_TERM_PROTOCOLS} to a comma-separated list: @samp{+name} forces a
+protocol on, @samp{-name} forces it off, and @code{all} names every protocol.
+The names are @code{keyboard}, @code{graphics}, @code{animation},
+@code{clipboard}, @code{clipboard-rich}, @code{progress} and @code{pointer}.
+Items apply left to right, and the flag beats the variable name by name:
+
+@example
+vacuum tui --term-protocols=-all                # no protocol at all
+SPACECRAFT_TERM_PROTOCOLS=+progress vacuum tui  # trust this terminal
+@end example
+
+With @option{--verbose}, Vacuum prints the state of every protocol, and why,
+after the frontend exits.
+
+@node Accessible mode
+@section Accessible mode
+
+Accessible mode (Standard @t{§18}) replaces the animated spinner with a static
+@samp{Working@dots{} 40%} line, since screen readers pronounce spinner glyphs.
+It is off unless you turn it on. In order of precedence:
+
+@enumerate
+@item
+@option{--accessible} or @option{--no-accessible};
+@item
+@env{SPACECRAFT_A11Y} set to @code{1} or @code{0};
+@item
+@code{enabled} in the @code{[accessibility]} table of the configuration file;
+@item
+the hints @env{NO_COLOR} (set and non-empty) and @samp{TERM=dumb}, which turn
+it on when nothing above has spoken.
+@end enumerate
+
+@option{--verbose} reports the resolved state and what decided it.
+
+The frontend still redraws the screen. For a fully linear, screen-reader
+friendly path, use the non-interactive commands, which cover every operation
+the frontend offers: @command{vacuum list} to review and @command{vacuum clean}
+to act (@pxref{Subcommands}).
 
 @node Output Modes
 @chapter Output Modes

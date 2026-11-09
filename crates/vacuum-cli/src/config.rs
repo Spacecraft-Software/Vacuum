@@ -42,6 +42,18 @@ pub struct Config {
     /// Days of disuse after which a build artifact counts as stale.
     #[serde(default)]
     pub stale_days: Option<u64>,
+    /// The `[accessibility]` table (Standard §18.1, source 3).
+    #[serde(default)]
+    pub accessibility: AccessibilityConfig,
+}
+
+/// The `[accessibility]` table.
+#[derive(Debug, Default, Deserialize)]
+pub struct AccessibilityConfig {
+    /// `enabled = true` turns accessible mode on; `false` keeps it off even
+    /// when a hint (`NO_COLOR`, `TERM=dumb`) would turn it on.
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 impl Config {
@@ -113,6 +125,8 @@ pub struct Settings {
     pub roots: Vec<PathBuf>,
     /// Days of disuse after which a build artifact counts as stale.
     pub stale_days: u64,
+    /// The config file's accessible-mode setting, if it has one.
+    pub accessible: Option<bool>,
 }
 
 /// Resolve the settings used when the command line does not override them.
@@ -153,6 +167,7 @@ pub fn settings(explicit_config: Option<&Path>) -> CliResult<Settings> {
     Ok(Settings {
         roots,
         stale_days: config.stale_days.unwrap_or(DEFAULT_STALE_DAYS),
+        accessible: config.accessibility.enabled,
     })
 }
 
@@ -187,6 +202,14 @@ mod tests {
     fn missing_stale_days_is_none_so_the_default_applies() {
         let config = Config::parse("roots = []", Path::new("config.toml")).unwrap();
         assert_eq!(config.stale_days, None);
+    }
+
+    #[test]
+    fn parses_accessibility_table() {
+        let config = Config::parse("[accessibility]\nenabled = true", Path::new("c")).unwrap();
+        assert_eq!(config.accessibility.enabled, Some(true));
+        let config = Config::parse("roots = []", Path::new("c")).unwrap();
+        assert_eq!(config.accessibility.enabled, None);
     }
 
     #[test]

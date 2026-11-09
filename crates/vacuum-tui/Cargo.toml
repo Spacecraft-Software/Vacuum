@@ -21,6 +21,11 @@ vacuum-theme.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+signal-hook.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

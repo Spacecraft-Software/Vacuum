@@ -75,6 +75,23 @@ pub struct GlobalArgs {
     /// on the command line and by `VACUUM_ROOTS`.
     #[arg(long, global = true, value_name = "PATH", env = "VACUUM_CONFIG")]
     pub config: Option<PathBuf>,
+
+    /// Accessible mode (Standard §18): no animation, progress as text. Also
+    /// `SPACECRAFT_A11Y=1` or `[accessibility] enabled = true` in the config.
+    #[arg(long, global = true, overrides_with = "no_accessible")]
+    pub accessible: bool,
+
+    /// Force accessible mode off, overriding the environment, the config and
+    /// the `NO_COLOR` / `TERM=dumb` hints.
+    #[arg(long, global = true, overrides_with = "accessible")]
+    pub no_accessible: bool,
+
+    /// Terminal protocol overrides for the TUI, e.g. `-all` or
+    /// `-keyboard,+progress`. Names: keyboard, graphics, animation, clipboard,
+    /// clipboard-rich, progress, pointer, all. Beats
+    /// `SPACECRAFT_TERM_PROTOCOLS` name by name.
+    #[arg(long, global = true, value_name = "LIST", allow_hyphen_values = true)]
+    pub term_protocols: Option<String>,
 }
 
 /// Output format selector.
@@ -271,6 +288,21 @@ mod tests {
             args.explicit_roots(),
             vec![PathBuf::from("/a"), PathBuf::from("/b")]
         );
+    }
+
+    #[test]
+    fn term_protocols_accepts_a_leading_minus() {
+        let cli = Cli::try_parse_from(["vacuum", "tui", "--term-protocols", "-all,+keyboard"])
+            .expect("a list starting with - is a value, not a flag");
+        assert_eq!(cli.global.term_protocols.as_deref(), Some("-all,+keyboard"));
+    }
+
+    #[test]
+    fn last_accessibility_flag_wins() {
+        let cli = Cli::try_parse_from(["vacuum", "--accessible", "--no-accessible", "tui"])
+            .expect("both flags parse");
+        assert!(!cli.global.accessible);
+        assert!(cli.global.no_accessible);
     }
 
     #[test]

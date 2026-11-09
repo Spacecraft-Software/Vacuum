@@ -14,6 +14,7 @@ use std::io::IsTerminal as _;
 use serde_json::{Value, json};
 use vacuum_cleaners::all_cleaners;
 use vacuum_core::Category;
+use vacuum_tui::Protocol;
 
 use crate::agent::OutputMode;
 use crate::envelope;
@@ -222,12 +223,23 @@ fn command_schema() -> Value {
                             "items": { "type": "string" },
                             "description": "Roots to scan. Defaults to VACUUM_ROOTS, then the config file, then $HOME."
                         },
-                        "root": selection_properties()["root"].clone()
+                        "root": selection_properties()["root"].clone(),
+                        "accessible": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Standard §18 accessible mode: no animation, progress as text. Also SPACECRAFT_A11Y=1."
+                        },
+                        "term-protocols": {
+                            "type": "string",
+                            "pattern": "^\\s*([+-]?(keyboard|graphics|animation|clipboard|clipboard-rich|progress|pointer|all)\\s*(,\\s*|$))*$",
+                            "description": "Terminal protocol overrides, e.g. -all or -keyboard,+progress. Beats SPACECRAFT_TERM_PROTOCOLS name by name."
+                        }
                     }
                 },
                 "examples": [
                     "vacuum tui",
-                    "vacuum tui /spacecraft-software --root ~/code"
+                    "vacuum tui /spacecraft-software --root ~/code",
+                    "vacuum tui --accessible --term-protocols=-progress"
                 ]
             }
         ]
@@ -248,6 +260,24 @@ pub fn run_schema() -> CliResult<()> {
     Ok(())
 }
 
+/// The TUI's terminal protocols and how to override them. These are only ever
+/// emitted to an interactive terminal: under an agent, CI, or a pipe, none is
+/// sent and no probe runs.
+fn term_protocols_manifest() -> Value {
+    let (used, unused): (Vec<_>, Vec<_>) = Protocol::ALL
+        .into_iter()
+        .partition(|protocol| protocol.used());
+    let names = |list: Vec<Protocol>| list.into_iter().map(Protocol::name).collect::<Vec<_>>();
+    json!({
+        "used": names(used),
+        "not_used": names(unused),
+        "override_flag": "--term-protocols",
+        "override_env": vacuum_tui::protocols::OVERRIDE_ENV,
+        "syntax": "+name forces on, -name forces off, comma-separated; `all` names every protocol; the flag beats the variable name by name",
+        "agent_mode": "no sequences and no probe"
+    })
+}
+
 /// Run `vacuum describe`: a capability manifest, enveloped like any data command.
 pub fn run_describe(mode: OutputMode, command_line: &str) -> CliResult<()> {
     let manifest = json!({
@@ -256,6 +286,15 @@ pub fn run_describe(mode: OutputMode, command_line: &str) -> CliResult<()> {
         "commands": ["scan", "list", "clean", "empty-trash", "schema", "describe", "tui"],
         "categories": category_slugs(),
         "cleaners": cleaner_manifest(),
+        "term_protocols": term_protocols_manifest(),
+        "accessibility": {
+            "flag": "--accessible",
+            "off_flag": "--no-accessible",
+            "env": "SPACECRAFT_A11Y",
+            "config": "[accessibility] enabled",
+            "hints": ["NO_COLOR", "TERM=dumb"],
+            "default": false
+        },
         "safety": {
             "dry_run_default": true,
             "trash_default": true,
