@@ -90,18 +90,25 @@ removal.
   never delete source files; privileged GC prints `sudo`, never escalates.
 
 ## Local install (daily-drive testing)
-Vacuum is the maintainer's daily driver. After landing changes, **build and install the
-latest build to `~/.cargo/bin` so `vacuum` runs from any directory** (not just the repo):
+Vacuum is the maintainer's daily driver, installed **declaratively from the Bravais flake**
+(`/spacecraft-software/bravais`: the `vacuum` flake input, consumed in `users/mj/home.nix`),
+not with `cargo install`. A change reaches the daily driver only after it is merged and
+pushed to `main` here: Bravais's `rebuild` (preflight) then bumps every input, the
+`vacuum` one included, and switches. That rebuild escalates, so the maintainer runs it;
+an agent never does.
 
-```
-cargo install --path crates/vacuum-cli --force
-```
+Verify with `vacuum --version`: the flake build reports `0.1.0-git`, and `command -v vacuum`
+resolves under `/etc/profiles/per-user/mj/bin`. Do not `cargo install` this repo: the copy
+would land in `~/.cargo/bin` and silently go stale (Bravais appends that directory to PATH,
+so the flake build still wins). An unrelated crates.io crate is also named `vacuum` (a
+spaceflight CLI), so never `cargo install vacuum` either. For a quick look at an unmerged
+change, run `nix run .` or `./target/debug/vacuum` from the checkout.
 
-`--force` is required because the binary is named `vacuum` (it replaces any prior install).
-Verify with `vacuum --version` (current `0.1.0` + maintainer line) and `command -v vacuum`
-→ `~/.cargo/bin/vacuum`. Note: an unrelated crates.io crate is also named `vacuum` (a
-spaceflight CLI); re-installing from this repo keeps `vacuum` pointed at the disk cleaner.
-Prefer this over running `./target/release/vacuum` so daily use matches a real install.
+## Toolchain
+The dev shell's Rust comes from the `nixpkgs` flake input (`nix develop`), currently 1.99.
+CI's fmt/clippy/test job installs the newest stable with rustup, so a newer clippy there
+can flag code that passes locally. When that happens, `nix flake update nixpkgs` brings
+the shell up to match, and the new lints get fixed in the same PR.
 
 ## Pre-commit gate
 ```
