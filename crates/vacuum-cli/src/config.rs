@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn missing_roots_key_defaults_empty() {
         let config = Config::parse("", Path::new("config.toml")).unwrap();
-        assert!(config.roots.is_empty());
+        assert_eq!(config.roots, Vec::<PathBuf>::new());
     }
 
     #[test]

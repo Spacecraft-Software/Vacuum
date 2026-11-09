@@ -311,6 +311,6 @@ mod tests {
         let Some(Command::Tui(args)) = cli.command else {
             panic!("expected the tui subcommand");
         };
-        assert!(args.explicit_roots().is_empty());
+        assert_eq!(args.explicit_roots(), Vec::<PathBuf>::new());
     }
 }

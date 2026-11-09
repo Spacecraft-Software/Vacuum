@@ -222,6 +222,14 @@ mod tests {
 
     use super::{MIN_AGE, collect, is_live_state};
 
+    /// Candidate labels, so an unexpected offer shows up in the failure message.
+    fn labels(found: &[vacuum_core::Candidate]) -> Vec<&str> {
+        found
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect()
+    }
+
     /// A `now` far enough ahead that every file written by a test reads as stale.
     fn far_future() -> SystemTime {
         SystemTime::now() + Duration::from_secs(365 * 24 * 60 * 60)
@@ -251,7 +259,11 @@ mod tests {
         // Real `now`: the file was written moments ago.
         let found = collect(tmp.path(), uid(), MIN_AGE, SystemTime::now());
 
-        assert!(found.is_empty(), "a fresh entry must never be offered");
+        assert_eq!(
+            labels(&found),
+            Vec::<&str>::new(),
+            "a fresh entry must never be offered"
+        );
     }
 
     #[test]
@@ -262,7 +274,11 @@ mod tests {
         // Ask for a uid that cannot match the one the file was created with.
         let found = collect(tmp.path(), uid().wrapping_add(1), MIN_AGE, far_future());
 
-        assert!(found.is_empty(), "another user's data is never offered");
+        assert_eq!(
+            labels(&found),
+            Vec::<&str>::new(),
+            "another user's data is never offered"
+        );
     }
 
     #[test]
@@ -289,7 +305,11 @@ mod tests {
 
         let found = collect(tmp.path(), uid(), MIN_AGE, far_future());
 
-        assert!(found.is_empty(), "live session state is never offered");
+        assert_eq!(
+            labels(&found),
+            Vec::<&str>::new(),
+            "live session state is never offered"
+        );
     }
 
     #[test]

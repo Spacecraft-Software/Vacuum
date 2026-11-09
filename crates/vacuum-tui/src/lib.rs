@@ -1246,7 +1246,7 @@ mod tests {
     #[test]
     fn read_subdirs_on_unreadable_path_is_empty() {
         let missing = PathBuf::from("/vacuum-tui/definitely/not/here");
-        assert!(read_subdirs(&missing).is_empty());
+        assert_eq!(read_subdirs(&missing), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -1259,7 +1259,11 @@ mod tests {
         toggle_root(&mut roots, &target);
         assert_eq!(roots.len(), 1, "first toggle adds the root");
         toggle_root(&mut roots, &target);
-        assert!(roots.is_empty(), "second toggle removes the root");
+        assert_eq!(
+            roots,
+            Vec::<PathBuf>::new(),
+            "second toggle removes the root"
+        );
     }
 
     #[test]

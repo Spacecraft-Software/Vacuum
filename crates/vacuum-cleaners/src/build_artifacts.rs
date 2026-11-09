@@ -114,6 +114,8 @@ mod tests {
         fs::write(tmp.path().join("misc/target/data"), vec![0_u8; 4096]).unwrap();
 
         let ctx = ScanContext::new(vec![tmp.path().to_path_buf()]);
-        assert!(BuildArtifacts.scan(&ctx).unwrap().is_empty());
+        let found = BuildArtifacts.scan(&ctx).unwrap();
+        let labels: Vec<&str> = found.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, Vec::<&str>::new());
     }
 }
