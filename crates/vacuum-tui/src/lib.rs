@@ -601,7 +601,7 @@ impl App {
                             self.copy(&text);
                         }
                         None => {
-                            self.status = "[WARN] Path is not valid UTF-8; not copied.".to_owned()
+                            self.status = "[WARN] Path is not valid UTF-8; not copied.".to_owned();
                         }
                     }
                 }
@@ -690,9 +690,7 @@ impl App {
 
     fn toggle_all(&mut self) {
         let select = !self.selected.iter().all(|&s| s);
-        for flag in &mut self.selected {
-            *flag = select;
-        }
+        self.selected.fill(select);
     }
 
     fn selected_count(&self) -> usize {
