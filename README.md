@@ -89,6 +89,11 @@ vacuum clean --category build-artifacts --apply --purge   # permanent delete
 vacuum list --json           # machine-readable output for scripts/agents
 ```
 
+In the TUI, `y` copies the highlighted path (OSC 52), and supported terminals get the
+kitty keyboard protocol and tab/taskbar progress (OSC 9;4). Nothing is sent to a terminal
+that does not support it; `--term-protocols=-all` turns all of it off. `--accessible` (or
+`SPACECRAFT_A11Y=1`) replaces the spinner with static progress text.
+
 ## Install
 
 > Do **not** run `cargo install vacuum`. An unrelated crates.io crate holds that

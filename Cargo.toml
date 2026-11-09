@@ -47,9 +47,10 @@ jwalk = "0.8"
 trash = "5"
 which = "7"
 # Safe syscall wrappers. `geteuid` for temp-file ownership checks, `flock` to
-# detect a Cargo build in progress — the `libc` equivalents would require
-# `unsafe`, which every crate forbids.
-rustix = { version = "1.1", features = ["process", "fs"] }
+# detect a Cargo build in progress, `poll` for the TUI's DA1-fenced terminal
+# probe — the `libc` equivalents would require `unsafe`, which every crate
+# forbids.
+rustix = { version = "1.1", features = ["process", "fs", "event"] }
 # rustc's own stable hasher (rust-lang/rustc-stable-hash). Reproduces the
 # `"rustc"` value Cargo writes into each fingerprint, so Vacuum can name the
 # toolchain that built an artifact without executing any compiler.
@@ -63,6 +64,9 @@ indicatif = "0.17"
 # TUI
 ratatui = "0.29"
 crossterm = "0.28"
+# Termination signals restore the terminal (tui-protocols §2.3). Already in the
+# lock through crossterm; the safe `flag` API needs no `unsafe`.
+signal-hook = "0.3"
 
 # Allocator (Microsoft Rust Guidelines M-MIMALLOC-APPS)
 mimalloc = "0.1"

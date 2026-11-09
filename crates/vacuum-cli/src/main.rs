@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod a11y;
 mod agent;
 mod app;
 mod cli;
@@ -50,7 +51,7 @@ fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> 
             }
         } else {
             let settings = config::settings(cli.global.config.as_deref())?;
-            return app::run_tui(&[], &settings);
+            return app::run_tui(&[], &settings, &cli.global);
         }
     }
 
@@ -78,12 +79,12 @@ fn run(cli: &Cli, mode: agent::OutputMode, command_line: &str) -> CliResult<()> 
         Some(Command::Describe) => introspect::run_describe(mode, command_line),
         Some(Command::Tui(args)) => {
             let settings = config::settings(cli.global.config.as_deref())?;
-            app::run_tui(&args.explicit_roots(), &settings)
+            app::run_tui(&args.explicit_roots(), &settings, &cli.global)
         }
         None => {
             if agent::should_launch_tui(&cli.global) {
                 let settings = config::settings(cli.global.config.as_deref())?;
-                app::run_tui(&[], &settings)
+                app::run_tui(&[], &settings, &cli.global)
             } else {
                 Err(CliError::no_command())
             }

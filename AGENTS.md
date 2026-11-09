@@ -35,9 +35,21 @@ Tool-agnostic conventions for AI agents working in this repository. (Claude Code
   `list`/`clean`; the TUI also has a runtime directory picker (`r`) to add/remove scan roots.
   TUI scanning/deleting run on a background thread with a live progress overlay (spinner + bar);
   `esc` cancels a deletion (after the current item) or quits a scan.
+- Terminal protocols (`spacecraft-tui-protocols`, `crates/vacuum-tui/src/{protocols,probe,session}.rs`):
+  kitty keyboard (DA1-fenced `CSI ? u` probe), OSC 52 copy (`y`), OSC 9;4 progress
+  (identity allow-list only — never on an unknown terminal, WezTerm stable, or inside a
+  multiplexer). Graphics/animation/OSC 22/OSC 5522 are unused. Gate: stdout TTY, not
+  agent/CI, `TERM` not dumb/unset. Probe runs after `ratatui::init` and before the first
+  `event::poll`. Restore (keyboard pop, progress clear) runs on exit, panic (hook chained
+  ahead of ratatui's), and SIGTERM/SIGHUP/SIGINT (flag polled each tick). Override:
+  `--term-protocols` beats `SPACECRAFT_TERM_PROTOCOLS` name by name.
+- Accessible mode (§18.1): `--accessible`/`--no-accessible` > `SPACECRAFT_A11Y` >
+  config `[accessibility] enabled` > hints `NO_COLOR`/`TERM=dumb`; off by default. Today it
+  only swaps the spinner for static percent text — the §18.2.3 linear TUI mode and the
+  high-contrast theme are not implemented yet.
 - Global flags: `--json` / `--format {human,json,jsonl,explore}`, `--fields`, `--apply`,
   `--purge`, `--yes`/`--force`, `--verbose`/`-v`, `--quiet`/`-q`, `--color`, `--no-color`,
-  `--config <path>`.
+  `--config <path>`, `--accessible`/`--no-accessible`, `--term-protocols <list>`.
 - Config (scanning commands `scan`/`list`/`clean`/`tui`; `empty-trash` exempt): default roots
   come from `--config`/`VACUUM_CONFIG` (TOML, `roots = [...]`), else
   `$XDG_CONFIG_HOME/vacuum/config.toml`. Precedence for default roots:
